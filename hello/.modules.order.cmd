@@ -1,0 +1,1 @@
+cmd_/home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/modules.order := {   echo /home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/hello_version.ko; :; } | awk '!x[$$0]++' - > /home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/modules.order

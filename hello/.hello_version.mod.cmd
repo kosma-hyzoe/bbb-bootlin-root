@@ -1,0 +1,1 @@
+cmd_/home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/hello_version.mod := { echo  /home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/hello_version.o;  echo; } > /home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/hello_version.mod

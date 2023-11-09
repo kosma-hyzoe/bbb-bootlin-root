@@ -1,0 +1,1 @@
+cmd_/home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/Module.symvers := sed 's/ko$$/o/' /home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/modules.order | scripts/mod/modpost -m -a   -o /home/kosma/projects/linux-kernel-labs/modules/nfsroot/root/hello/Module.symvers -e -i Module.symvers   -T -

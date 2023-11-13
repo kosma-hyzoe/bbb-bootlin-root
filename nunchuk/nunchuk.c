@@ -4,11 +4,19 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 
+#define INIT_BYTES {0xf0, 0x55}
+
 
 /* Add your code here */
 int nun_probe(struct i2c_client *client)
 {
+    int ret_val;
+    char bytes[] = INIT_BYTES;
+
     pr_alert("Probin'");
+    if (ret_val = i2c_master_send(client, bytes , 2))
+        pr_alert("i2c_master_send: error %d\n", ret_val);
+
     return 0;
 }
 

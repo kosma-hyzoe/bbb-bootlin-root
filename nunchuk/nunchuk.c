@@ -9,7 +9,6 @@
 int nun_probe(struct i2c_client *client)
 {
     pr_alert("Probin'");
-    printk("UWU");
     return 0;
 }
 

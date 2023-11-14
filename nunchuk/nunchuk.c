@@ -4,6 +4,7 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/module.h>
+#include <linux/fs.h>
 #include <linux/i2c.h>
 
 
@@ -103,8 +104,6 @@ static const struct of_device_id nunchuk_of_match[] = {
 	{ }
 };
 
-
-
 struct i2c_driver nun_driver = {
 	.driver = {
 		.name = DEV_NAME,
@@ -113,6 +112,15 @@ struct i2c_driver nun_driver = {
 	.probe_new = nun_probe,
 	.remove = nun_remove,
 	.id_table = nunchuk_id,
+};
+
+
+static struct file_operations fops = {
+	.owner = THIS_MODULE,
+	/* .open = nun_open, */
+	/* .release = nun_close, */
+	/* .read = nun_read, */
+	/* .write = nun_write */
 };
 
 MODULE_DEVICE_TABLE(i2c, nunchuk_id);

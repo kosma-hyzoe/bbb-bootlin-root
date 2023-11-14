@@ -97,7 +97,6 @@ static const struct i2c_device_id nunchuk_id[] = {
 };
 
 
-MODULE_DEVICE_TABLE(i2c, nunchuk_id);
 
 static const struct of_device_id nunchuk_of_match[] = {
 	{ .compatible = "nintendo," DEV_NAME },
@@ -116,5 +115,7 @@ struct i2c_driver nun_driver = {
 	.id_table = nunchuk_id,
 };
 
+MODULE_DEVICE_TABLE(i2c, nunchuk_id);
 module_i2c_driver(nun_driver);
+
 MODULE_LICENSE("GPL");

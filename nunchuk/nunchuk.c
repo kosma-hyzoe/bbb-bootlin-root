@@ -6,36 +6,38 @@
 #include <linux/module.h>
 #include <linux/i2c.h>
 
+
 #define INIT_BYTES_1 {0xf0, 0x55}
 #define INIT_BYTES_2 {0xfb, 0x00}
-#define READ_BYTE 0x00
+#define READ_BYTES {0x00}
+#define DEV_NAME "nunchuk"
 
 #define PRESSED 0
 #define RELEASED 1
 
 static char read_buf[6];
 
-
-int _nun_read_regs(struct i2c_client *client)
+int nun_read_regs(struct i2c_client *client)
 {
 	int ret_val;
-	char byte[] = {READ_BYTE};
+	char rb[] = READ_BYTES;
 
 	usleep_range(10000, 20000);
-	ret_val = i2c_master_send(client, byte, sizeof(byte));
+
+	ret_val = i2c_master_send(client, rb, sizeof(rb));
 	if (ret_val < 0) {
-		pr_alert("error %d while sending bytes starting with %c\n",
-				ret_val, READ_BYTE);
+		pr_alert(DEV_NAME ": error %d while sending bytes starting with %c\n",
+				ret_val, rb[0]);
 		return ret_val;
 	}
 	usleep_range(10000, 20000);
 
 	ret_val = i2c_master_recv(client, read_buf, 6);
 	if (ret_val < 0) {
-		pr_alert("i2c_master_recv: error %d\n", ret_val);
+		pr_alert(DEV_NAME ": i2c_master_recv: error %d\n", ret_val);
 		return ret_val;
 	} else if (ret_val == 0) {
-		pr_alert("Zero bytes read!");
+		pr_alert(DEV_NAME ": Zero bytes read!");
 		return 1;
 	}
 	return 0;
@@ -50,7 +52,7 @@ int nun_probe(struct i2c_client *client)
 	char button_state_byte;
 	int z_state, c_state;
 
-	pr_alert("Nunchuk device detected");
+	pr_alert(DEV_NAME ": device detected");
 
 	/* Initialization */
 	ret_val = i2c_master_send(client, ib1, sizeof(ib1));
@@ -71,7 +73,7 @@ int nun_probe(struct i2c_client *client)
 
 	/* Reading button states */
 	for (i = 0; i < 2; i++)
-		_nun_read_regs(client);
+		nun_read_regs(client);
 
 	button_state_byte = read_buf[5];
 	z_state = button_state_byte & 0b01 ? RELEASED : PRESSED;
@@ -90,7 +92,7 @@ int nun_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id nunchuk_id[] = {
-	{"nunchuk"},
+	{DEV_NAME},
 	{  }
 };
 
@@ -98,7 +100,7 @@ static const struct i2c_device_id nunchuk_id[] = {
 MODULE_DEVICE_TABLE(i2c, nunchuk_id);
 
 static const struct of_device_id nunchuk_of_match[] = {
-	{ .compatible = "nintendo,nunchuk" },
+	{ .compatible = "nintendo," DEV_NAME },
 	{ }
 };
 
@@ -106,7 +108,7 @@ static const struct of_device_id nunchuk_of_match[] = {
 
 struct i2c_driver nun_driver = {
 	.driver = {
-		.name = "nunchuk",
+		.name = DEV_NAME,
 		.of_match_table = nunchuk_of_match,
 	},
 	.probe_new = nun_probe,
@@ -114,5 +116,5 @@ struct i2c_driver nun_driver = {
 	.id_table = nunchuk_id,
 };
 
-MODULE_LICENSE("GPL");
 module_i2c_driver(nun_driver);
+MODULE_LICENSE("GPL");

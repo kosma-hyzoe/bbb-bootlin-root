@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "linux/device.h"
 #include "linux/mod_devicetable.h"
 #include <linux/init.h>
 #include <linux/delay.h>
@@ -71,6 +72,8 @@ int nun_probe(struct i2c_client *client)
 		 ret_val, ib2[0]);
 		return ret_val;
 	}
+
+    struct input_dev input = devm_kmalloc(struct device *dev, size_t size, gfp_t gfp)
 
 	/* Reading button states */
 	for (i = 0; i < 2; i++)

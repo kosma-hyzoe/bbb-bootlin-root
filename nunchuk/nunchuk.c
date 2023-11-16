@@ -55,7 +55,7 @@ int nun_probe(struct i2c_client *client)
 	char button_state_byte;
 	int z_state, c_state;
 
-    struct input_dev *input;
+	struct input_dev *input;
 
 	pr_alert(DEV_NAME ": device detected");
 
@@ -76,7 +76,10 @@ int nun_probe(struct i2c_client *client)
 		return ret_val;
 	}
 
-    input = devm_input_allocate_device(&client->dev);
+	if (!(input = devm_input_allocate_device(&client->dev))) {
+		return 1;
+	}
+
 
 	/* Reading button states */
 	for (i = 0; i < 2; i++)

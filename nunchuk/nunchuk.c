@@ -7,6 +7,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/i2c.h>
+#include <linux/input.h>
 
 
 #define INIT_BYTES_1 {0xf0, 0x55}
@@ -54,6 +55,8 @@ int nun_probe(struct i2c_client *client)
 	char button_state_byte;
 	int z_state, c_state;
 
+    struct input_dev *input;
+
 	pr_alert(DEV_NAME ": device detected");
 
 	/* Initialization */
@@ -73,7 +76,7 @@ int nun_probe(struct i2c_client *client)
 		return ret_val;
 	}
 
-    struct input_dev input = devm_kmalloc(struct device *dev, size_t size, gfp_t gfp)
+    input = devm_input_allocate_device(&client->dev);
 
 	/* Reading button states */
 	for (i = 0; i < 2; i++)

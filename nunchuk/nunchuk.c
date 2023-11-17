@@ -18,16 +18,15 @@
 #define PRESSED 0
 #define RELEASED 1
 
+
 static char read_buf[6];
 
 struct nunchuk_dev {
 	struct i2c_client *i2c_client;
 };
 
-int nun_poll(struct input_dev *dev)
-{
-	return 0;	
-}
+
+
 
 int nun_read_regs(struct i2c_client *client)
 {
@@ -55,6 +54,11 @@ int nun_read_regs(struct i2c_client *client)
 	return 0;
 }
 
+int nun_poll(struct input_dev *dev)
+{
+	return 0;
+}
+
 int nun_probe(struct i2c_client *client)
 {
 	int ret_val, i;
@@ -67,15 +71,11 @@ int nun_probe(struct i2c_client *client)
 	struct input_dev *input;
 	struct nunchuk_dev *nunchuk;
 
-	/* pr_alert(DEV_NAME ": device detected"); */
-	/* nunchuk =  devm_kzalloc(&client->dev, sizeof(*nunchuk), GFP_KERNEL); */ 
-	/* if (!nunchuk) */
-	/* 	return -ENOMEM; */
-	/* nunchuk->i2c_client = client; */
-	/* input_set_drvdata(input, nunchuk); */
 
-	if (!(input = devm_input_allocate_device(&client->dev))) {
-		pr_alert("failed to allocate input device");	
+	/* Registration */
+	input = devm_input_allocate_device(&client->dev);
+	if (!input) {
+		pr_alert("failed to allocate input device");
 		return -ENOMEM;
 	}
 	input->name = "Wii Nunchuck";
@@ -90,6 +90,9 @@ int nun_probe(struct i2c_client *client)
 		pr_alert("failed to register input device");
 		return ret_val;
 	}
+	nunchuk = devm_kzalloc(&client->dev, sizeof(*nunchuk), GFP_KERNEL);
+	if (!nunchuk)
+		return -ENOMEM;
 
 	/* Initialization */
 	ret_val = i2c_master_send(client, ib1, sizeof(ib1));
@@ -108,7 +111,6 @@ int nun_probe(struct i2c_client *client)
 				ret_val, ib2[0]);
 		return ret_val;
 	}
-
 
 	/* Reading button states */
 	for (i = 0; i < 2; i++)

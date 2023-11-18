@@ -1,3 +1,4 @@
+
 // SPDX-License-Identifier: GPL-2.0
 
 #include "linux/device.h"
@@ -15,21 +16,18 @@
 #define INIT_READ_BYTES {0x00}
 #define DEV_NAME "nunchuk"
 
-#define PRESSED 0
-#define RELEASED 1
+#define PRESSED 1
+#define RELEASED 0
 
 static char read_buf[6];
+static int z_state, c_state;
 
 struct nunchuk_dev {
 	struct i2c_client *i2c_client;
 };
 
-int nun_poll(struct input_dev *dev)
-{
-	return 0;	
-}
 
-int nun_read_regs(struct i2c_client *client)
+int _nun_read_regs(struct i2c_client *client)
 {
 	int ret_val;
 	char rb[] = INIT_READ_BYTES;
@@ -55,14 +53,29 @@ int nun_read_regs(struct i2c_client *client)
 	return 0;
 }
 
+void nun_poll(struct input_dev *input)
+{
+	int ret_val;
+	char button_state_byte;
+
+	struct nunchuk_dev *nun = input_get_drvdata(input);
+	struct i2c_client *client = nun->i2c_client;
+
+	ret_val = _nun_read_regs(client);
+	if (ret_val < 0)
+		return;
+
+	button_state_byte = read_buf[5];
+	z_state = button_state_byte & 0b01 ? RELEASED : PRESSED;
+	c_state = button_state_byte & 0b10 ? RELEASED : PRESSED;
+}
+
+
 int nun_probe(struct i2c_client *client)
 {
-	int ret_val, i;
+	int i, ret_val;
 	const char ib1[2] = INIT_BYTES_1;
 	const char ib2[2] = INIT_BYTES_2;
-
-	char button_state_byte;
-	int z_state, c_state;
 
 	struct input_dev *input;
 	struct nunchuk_dev *nunchuk;
@@ -87,11 +100,12 @@ int nun_probe(struct i2c_client *client)
 	}
 
 	/* Allocation */
-	if (!(input = devm_input_allocate_device(&client->dev))) {
-		pr_alert("failed to allocate input device");	
+	input = devm_input_allocate_device(&client->dev);
+	if (!input) {
+		pr_alert("failed to allocate input device");
 		return -ENOMEM;
 	}
-	nunchuk =  devm_kzalloc(&client->dev, sizeof(*nunchuk), GFP_KERNEL); 
+	nunchuk =  devm_kzalloc(&client->dev, sizeof(*nunchuk), GFP_KERNEL);
 	if (!nunchuk)
 		return -ENOMEM;
 
@@ -104,6 +118,9 @@ int nun_probe(struct i2c_client *client)
 	set_bit(BTN_C, input->keybit);
 	set_bit(BTN_Z, input->keybit);
 
+	/* input_report_key(input, BTN_Z, z_state); */
+	/* input_report_key(input, BTN_C, c_state); */
+	/* input_sync(input); */
 
 	ret_val = input_register_device(input);
 	if (ret_val != 0) {
@@ -111,13 +128,8 @@ int nun_probe(struct i2c_client *client)
 		return ret_val;
 	}
 
-	/* Reading button states */
 	for (i = 0; i < 2; i++)
-		nun_read_regs(client);
-
-	button_state_byte = read_buf[5];
-	z_state = button_state_byte & 0b01 ? RELEASED : PRESSED;
-	c_state = button_state_byte & 0b10 ? RELEASED : PRESSED;
+		nun_poll(input);
 
 	pr_alert("Z: %s\n", z_state == PRESSED ? "pressed" : "released");
 	pr_alert("C: %s\n", c_state == PRESSED ? "pressed" : "released");

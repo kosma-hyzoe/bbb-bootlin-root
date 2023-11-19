@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: GPL-2.0
 
 #include "linux/device.h"
@@ -18,6 +17,8 @@
 
 #define PRESSED 1
 #define RELEASED 0
+
+#define POLL_INTERVAL 50
 
 static char read_buf[6];
 static int z_state, c_state;
@@ -46,11 +47,9 @@ int _nun_read_regs(struct i2c_client *client)
 	if (ret_val < 0) {
 		pr_alert(DEV_NAME ": i2c_master_recv: error %d\n", ret_val);
 		return ret_val;
-	} else if (ret_val == 0) {
-		pr_alert(DEV_NAME ": Zero bytes read!");
-		return 1;
 	}
 	return 0;
+
 }
 
 void nun_poll(struct input_dev *input)
@@ -68,19 +67,22 @@ void nun_poll(struct input_dev *input)
 	button_state_byte = read_buf[5];
 	z_state = button_state_byte & 0b01 ? RELEASED : PRESSED;
 	c_state = button_state_byte & 0b10 ? RELEASED : PRESSED;
+
+	input_report_key(input, BTN_Z, z_state);
+	input_report_key(input, BTN_C, c_state);
+	input_sync(input);
 }
 
 
 int nun_probe(struct i2c_client *client)
 {
-	int i, ret_val;
+	int ret_val;
 	const char ib1[2] = INIT_BYTES_1;
 	const char ib2[2] = INIT_BYTES_2;
 
 	struct input_dev *input;
-	struct nunchuk_dev *nunchuk;
+	struct nunchuk_dev *nun;
 
-	pr_alert(DEV_NAME ": device detected");
 
 	/* Initialization */
 	ret_val = i2c_master_send(client, ib1, sizeof(ib1));
@@ -102,38 +104,39 @@ int nun_probe(struct i2c_client *client)
 	/* Allocation */
 	input = devm_input_allocate_device(&client->dev);
 	if (!input) {
+		// TODO no error checking needed here?
 		pr_alert("failed to allocate input device");
 		return -ENOMEM;
 	}
-	nunchuk =  devm_kzalloc(&client->dev, sizeof(*nunchuk), GFP_KERNEL);
-	if (!nunchuk)
+	nun =  devm_kzalloc(&client->dev, sizeof(*nun), GFP_KERNEL);
+	if (!nun)
 		return -ENOMEM;
-
-	nunchuk->i2c_client = client;
-	input_set_drvdata(input, nunchuk);
+	nun->i2c_client = client;
+	input_set_drvdata(input, nun);
 
 	input->name = "Wii Nunchuck";
 	input->id.bustype = BUS_I2C;
+
 	set_bit(EV_KEY, input->evbit);
 	set_bit(BTN_C, input->keybit);
 	set_bit(BTN_Z, input->keybit);
 
-	/* input_report_key(input, BTN_Z, z_state); */
-	/* input_report_key(input, BTN_C, c_state); */
-	/* input_sync(input); */
+	/* for (i = 0; i < 2; i++) */
+	/* 	nun_poll(input); */
+	ret_val = input_setup_polling(input, nun_poll);
+	if (ret_val) {
+		dev_err(&client->dev, "input setup polling: (%d)\n", ret_val);
+		return ret_val;
+	}
+	input_set_poll_interval(input, POLL_INTERVAL);
+	input_set_min_poll_interval(input, POLL_INTERVAL);
+	input_set_max_poll_interval(input, POLL_INTERVAL);
 
 	ret_val = input_register_device(input);
-	if (ret_val != 0) {
+	if (ret_val < 0) {
 		pr_alert("failed to register input device");
 		return ret_val;
 	}
-
-	for (i = 0; i < 2; i++)
-		nun_poll(input);
-
-	pr_alert("Z: %s\n", z_state == PRESSED ? "pressed" : "released");
-	pr_alert("C: %s\n", c_state == PRESSED ? "pressed" : "released");
-
 	return 0;
 }
 

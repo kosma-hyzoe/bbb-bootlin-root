@@ -31,14 +31,14 @@ struct nunchuk_dev {
 int _nun_read_regs(struct i2c_client *client)
 {
 	int ret_val;
-	char rb[] = INIT_READ_BYTES;
+	char tx[] = INIT_READ_BYTES;
 
 	usleep_range(10000, 20000);
 
-	ret_val = i2c_master_send(client, rb, sizeof(rb));
+	ret_val = i2c_master_send(client, tx, sizeof(tx));
 	if (ret_val < 0) {
 		pr_alert(DEV_NAME ": error %d while sending bytes starting with %c\n",
-				ret_val, rb[0]);
+				ret_val, tx[0]);
 		return ret_val;
 	}
 	usleep_range(10000, 20000);
@@ -77,34 +77,33 @@ void nun_poll(struct input_dev *input)
 int nun_probe(struct i2c_client *client)
 {
 	int ret_val;
-	const char ib1[2] = INIT_BYTES_1;
-	const char ib2[2] = INIT_BYTES_2;
+	const char rx1[2] = INIT_BYTES_1;
+	const char rx2[2] = INIT_BYTES_2;
 
 	struct input_dev *input;
 	struct nunchuk_dev *nun;
 
 
 	/* Initialization */
-	ret_val = i2c_master_send(client, ib1, sizeof(ib1));
+	ret_val = i2c_master_send(client, rx1, sizeof(rx1));
 	if (ret_val < 0) {
 		pr_alert("error %d while sending bytes starting with %c\n",
-				ret_val, ib1[0]);
+				ret_val, rx1[0]);
 		return ret_val;
 	}
 
 	udelay(1000);
 
-	ret_val = i2c_master_send(client, ib2, sizeof(ib2));
+	ret_val = i2c_master_send(client, rx2, sizeof(rx2));
 	if (ret_val < 0) {
 		pr_alert("error %d while sending bytes starting with %c\n",
-				ret_val, ib2[0]);
+				ret_val, rx2[0]);
 		return ret_val;
 	}
 
 	/* Allocation */
 	input = devm_input_allocate_device(&client->dev);
 	if (!input) {
-		// TODO no error checking needed here?
 		pr_alert("failed to allocate input device");
 		return -ENOMEM;
 	}
@@ -121,8 +120,6 @@ int nun_probe(struct i2c_client *client)
 	set_bit(BTN_C, input->keybit);
 	set_bit(BTN_Z, input->keybit);
 
-	/* for (i = 0; i < 2; i++) */
-	/* 	nun_poll(input); */
 	ret_val = input_setup_polling(input, nun_poll);
 	if (ret_val) {
 		dev_err(&client->dev, "input setup polling: (%d)\n", ret_val);
@@ -142,7 +139,7 @@ int nun_probe(struct i2c_client *client)
 
 int nun_remove(struct i2c_client *client)
 {
-	pr_alert("Removin'");
+	/* Nothing to do here */
 	return 0;
 }
 

@@ -143,13 +143,6 @@ int nun_remove(struct i2c_client *client)
 	return 0;
 }
 
-static const struct i2c_device_id nunchuk_id[] = {
-	{DEV_NAME},
-	{  }
-};
-
-
-
 static const struct of_device_id nunchuk_of_match[] = {
 	{ .compatible = "nintendo," DEV_NAME },
 	{ }
@@ -162,7 +155,6 @@ struct i2c_driver nun_driver = {
 	},
 	.probe_new = nun_probe,
 	.remove = nun_remove,
-	.id_table = nunchuk_id,
 };
 
 

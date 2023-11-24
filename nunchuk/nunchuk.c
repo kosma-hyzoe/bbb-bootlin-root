@@ -12,6 +12,7 @@
 
 #define INIT_BYTES_1 {0xf0, 0x55}
 #define INIT_BYTES_2 {0xfb, 0x00}
+#define N_INIT_BYTES 2
 #define INIT_READ_BYTES {0x00}
 #define DEV_NAME "nunchuk"
 
@@ -36,7 +37,7 @@ int _nun_read_regs(struct i2c_client *client)
 	usleep_range(10000, 20000);
 
 	ret_val = i2c_master_send(client, tx, sizeof(tx));
-	if (ret_val < 0) {
+	if (ret_val != N_INIT_BYTES) {
 		pr_alert(DEV_NAME ": error %d while sending bytes starting with %c\n",
 				ret_val, tx[0]);
 		return ret_val;
@@ -44,7 +45,7 @@ int _nun_read_regs(struct i2c_client *client)
 	usleep_range(10000, 20000);
 
 	ret_val = i2c_master_recv(client, read_buf, 6);
-	if (ret_val < 0) {
+	if (ret_val != N_INIT_BYTES) {
 		pr_alert(DEV_NAME ": i2c_master_recv: error %d\n", ret_val);
 		return ret_val;
 	}

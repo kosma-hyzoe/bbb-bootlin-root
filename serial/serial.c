@@ -33,6 +33,13 @@ static int serial_remove(struct platform_device *pdev)
         return 0;
 }
 
+static const struct of_device_id serial_of_match[] = {
+	{ .compatible = "bootlin,serial" },
+	{ }
+};
+
+MODULE_DEVICE_TABLE(of, serial_of_match);
+
 static struct platform_driver serial_driver = {
         .driver = {
                 .name = "serial",
@@ -42,5 +49,4 @@ static struct platform_driver serial_driver = {
         .remove = serial_remove,
 };
 module_platform_driver(serial_driver);
-
 MODULE_LICENSE("GPL");

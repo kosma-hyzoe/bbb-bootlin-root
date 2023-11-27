@@ -3,11 +3,17 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include "linux/mod_devicetable.h"
+#include "linux/serial_reg.h"
 /* Add your code here */
 
 struct serial_dev {
 	void __iomem *regs;
 };
+
+void reg_write(struct serial_dev serial, u32 val, int reg)
+{
+
+}
 
 static int serial_probe(struct platform_device *pdev)
 {
@@ -22,7 +28,7 @@ static int serial_probe(struct platform_device *pdev)
 	serial->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(serial->regs))
 		return PTR_ERR(serial->regs);
-
+	reg_write(serial, UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT, UART_FCR);
 	return 0;
 }
 

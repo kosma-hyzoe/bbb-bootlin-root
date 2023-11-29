@@ -19,8 +19,10 @@
 
 struct serial_dev {
 	void __iomem *regs;
+	struct miscdevice miscdev;
 	struct platform_device *pdev;
 };
+
 
 static u32 reg_read(struct serial_dev *serial, unsigned int reg)
 {
@@ -37,7 +39,6 @@ static int _config_baud_rate(struct serial_dev *serial,
 		struct platform_device *pdev)
 {
 	int ret;
-	/* u32 baud_divisor, uartclk; */
 	unsigned int baud_divisor, uartclk;
 	ret = of_property_read_u32(pdev->dev.of_node, "clock-frequency",
 			&uartclk);
@@ -63,6 +64,12 @@ static void serial_write_char(struct serial_dev *dev, u8 val)
 		cpu_relax();
 
 	reg_write(dev, val, UART_TX);
+}
+
+
+ssize_t serial_write(sturct file *f, const char __user *buf, size_t sz, loff_t *off)
+{
+
 }
 
 static int serial_probe(struct platform_device *pdev)

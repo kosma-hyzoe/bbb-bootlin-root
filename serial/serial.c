@@ -30,7 +30,6 @@ static u32 reg_read(struct serial_dev *serial, unsigned int reg)
 static void reg_write(struct serial_dev *serial, u32 val, unsigned int reg)
 {
 
-	/* writel(val, serial->regs + (reg << 2)); */
 	*(u32 *)(serial->regs + (reg << 2)) = val;
 }
 
@@ -38,6 +37,7 @@ static int _config_baud_rate(struct serial_dev *serial,
 		struct platform_device *pdev)
 {
 	int ret;
+	/* u32 baud_divisor, uartclk; */
 	unsigned int baud_divisor, uartclk;
 	ret = of_property_read_u32(pdev->dev.of_node, "clock-frequency",
 			&uartclk);
@@ -93,8 +93,10 @@ static int serial_probe(struct platform_device *pdev)
 	}
 
 
+	/* soft reset */
 	reg_write(serial, UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT, UART_FCR);
 	reg_write(serial, 0x00, UART_OMAP_MDR1);
+
 	serial_write_char(serial, 'f');
 
 	return 0;

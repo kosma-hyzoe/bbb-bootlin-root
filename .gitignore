@@ -12,6 +12,12 @@
 #
 # Normal rules (sorted alphabetically)
 #
+
+foo
+bar
+
+serial/serial-get-counter
+serial/serial-reset-counter
 .*
 *.a
 *.asn1.[ch]

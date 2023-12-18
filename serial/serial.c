@@ -111,8 +111,6 @@ static int serial_probe(struct platform_device *pdev)
 	struct serial_dev *serial;
 	struct resource *res;
 
-	pr_info("Called %s\n", __func__);
-
 	/* allocation and pointer madness */
 	serial = devm_kzalloc(&pdev->dev, sizeof(*serial), GFP_KERNEL);
 	if (!serial)

@@ -208,7 +208,6 @@ static int serial_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to get resource\n");
 		return -ENODEV;
 	}
-
 	dev_info(&pdev->dev, "got address 0x%x\n", res->start);
 
 	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);

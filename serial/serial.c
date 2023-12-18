@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "asm-generic/errno-base.h"
 #include "linux/device/driver.h"
+#include "linux/irqreturn.h"
 #include "linux/limits.h"
 #include "linux/moduleparam.h"
 #include <linux/init.h>
@@ -20,11 +21,13 @@
 #include <linux/debugfs.h>
 /* Add your code here */
 
-#define MAX_LINE_LEN 256
+#define SERIAL_RESET_COUNTER	0
+#define SERIAL_GET_COUNTER	1
 
 struct serial_dev {
 	void __iomem *regs;
 	struct miscdevice miscdev;
+	unsigned int counter;
 	struct platform_device *pdev;
 };
 
@@ -65,6 +68,7 @@ static int _config_baud_rate(struct serial_dev *serial,
 
 static void serial_write_char(struct serial_dev *serial, u8 val)
 {
+	/* wait until transmit hold register is empty */
 	while ((reg_read(serial, UART_LSR) & UART_LSR_THRE) == 0)
 		cpu_relax();
 
@@ -97,17 +101,50 @@ ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 	return -1;
 }
 
+static long serial_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+{
+	unsigned int __user *argp = (unsigned int __user *) arg;
+	struct serial_dev *serial = container_of(f->private_data,
+			struct serial_dev, miscdev);
+
+	switch (cmd) {
+		case SERIAL_RESET_COUNTER:
+			serial->counter = 0;
+			break;
+		case SERIAL_GET_COUNTER:
+			if (put_user(serial->counter, argp))
+				return -EFAULT;
+			break;
+		default:
+			return -ENOTTY;
+	}
+	return 0;
+}
+
+
 
 static const struct file_operations serial_fops = {
 	.owner = THIS_MODULE,
 	.read = serial_read,
 	.write = serial_write,
-	/* .unlocked_ioctl = serial_ioctl, */
+	.unlocked_ioctl = serial_ioctl,
 };
+
+static irqreturn_t serial_interrupt(int irq, void *dev_id)
+{
+	u32 val;
+	struct serial_dev *serial = (struct serial_dev *) dev_id;
+
+	val = reg_read(serial, UART_RX);
+	pr_alert("%c\n", val);
+	pr_alert("%s called", __func__);
+	return IRQ_HANDLED;
+}
 
 static int serial_probe(struct platform_device *pdev)
 {
-	int ret_val;
+	int irq, ret;
+
 	struct serial_dev *serial;
 	struct resource *res;
 
@@ -122,24 +159,40 @@ static int serial_probe(struct platform_device *pdev)
 	if (IS_ERR(serial->regs))
 		return PTR_ERR(serial->regs);
 
+	/* power management */
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_get_sync(&pdev->dev);
 
-	ret_val = _config_baud_rate(serial, pdev);
-	if (ret_val < 0) {
+	/* baud rate config */
+	ret = _config_baud_rate(serial, pdev);
+	if (ret < 0) {
 		pm_runtime_disable(&pdev->dev);
-		return ret_val;
+		return ret;
 	}
-
 
 	/* soft reset */
 	reg_write(serial, UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT, UART_FCR);
 	reg_write(serial, 0x00, UART_OMAP_MDR1);
 
+	/* retrival of address, name etc. from the device tree */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
 		return -1;
 	}
+
+
+	/* interrupts */
+	irq = platform_get_irq(pdev, 0);
+	ret = devm_request_irq(&pdev->dev, irq, serial_interrupt, 0, "serial",
+			serial);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to register interrupt handler %d\n",
+				ret);
+		return ret;
+	}
+	reg_write(serial, UART_IER_RDI, UART_IER);
+
+	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
 			"serial-%x", res->start);
 	serial->miscdev.fops = &serial_fops;
@@ -154,14 +207,10 @@ static int serial_remove(struct platform_device *pdev)
 {
 	struct serial_dev *dev = platform_get_drvdata(pdev);
 
-	pr_info("Called %s\n", __func__);
-
-	/* debugfs_remove(dev->debugfs_dir); */
 	misc_deregister(&dev->miscdev);
+	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
-	dev_info(&pdev->dev, "remove complete\n");
-	pm_runtime_disable(&pdev->dev);
 	return 0;
 }
 
@@ -176,6 +225,7 @@ MODULE_DEVICE_TABLE(of, serial_of_match);
 static struct platform_driver serial_driver = {
 	.driver = {
 		.name = "bootlin-serial",
+		/* this signals "the module is in charge of this char device" */
 		.owner = THIS_MODULE,
 		.of_match_table = serial_of_match,
 	},

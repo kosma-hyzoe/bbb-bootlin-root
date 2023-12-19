@@ -273,7 +273,6 @@ static int serial_probe(struct platform_device *pdev)
 	debugfs_create_u32("rx_counter", S_IRUGO, dev->debugfs_dir, &dev->rx_counter);
 
 	dev_info(&pdev->dev, "probe complete\n");
-	serial_write_char(dev, 'f');
 
 	return 0;
 }

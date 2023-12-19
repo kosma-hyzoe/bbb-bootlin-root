@@ -19,7 +19,6 @@
 #include <linux/sched.h>
 #include <uapi/linux/serial_reg.h>
 #include <linux/debugfs.h>
-/* Add your code here */
 
 #define SERIAL_RESET_COUNTER	0
 #define SERIAL_GET_COUNTER	1
@@ -39,11 +38,10 @@ static u32 reg_read(struct serial_dev *serial, unsigned int reg)
 
 static void reg_write(struct serial_dev *serial, u32 val, unsigned int reg)
 {
-
 	*(u32 *)(serial->regs + (reg << 2)) = val;
 }
 
-static int _config_baud_rate(struct serial_dev *serial,
+static int config_baud_rate(struct serial_dev *serial,
 		struct platform_device *pdev)
 {
 	int ret;
@@ -73,12 +71,16 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 		cpu_relax();
 
 	reg_write(serial, val, UART_TX);
+
 	if (val == '\n')
 		serial_write_char(serial, '\r');
+	else
+		serial->counter++;
 }
 
 
-ssize_t serial_write(struct file *file, const char __user *buf, size_t sz, loff_t *off)
+ssize_t serial_write(struct file *file, const char __user *ubuf,
+		size_t sz, loff_t *off)
 {
 	struct miscdevice *miscdev_ptr = file->private_data;
 	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
@@ -86,7 +88,7 @@ ssize_t serial_write(struct file *file, const char __user *buf, size_t sz, loff_
 	u8 c;
 	int i;
 	for (i = 0; i < sz; i++) {
-		if (get_user(c, buf + i))
+		if (get_user(c, ubuf + i))
 			return -EFAULT;
 
 		serial_write_char(serial, c);
@@ -164,7 +166,7 @@ static int serial_probe(struct platform_device *pdev)
 	pm_runtime_get_sync(&pdev->dev);
 
 	/* baud rate config */
-	ret = _config_baud_rate(serial, pdev);
+	ret = config_baud_rate(serial, pdev);
 	if (ret < 0) {
 		pm_runtime_disable(&pdev->dev);
 		return ret;

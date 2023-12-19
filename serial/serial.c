@@ -23,11 +23,19 @@
 #define SERIAL_RESET_COUNTER	0
 #define SERIAL_GET_COUNTER	1
 
+#define SERIAL_BUFSIZE 16
+
 struct serial_dev {
 	void __iomem *regs;
 	struct miscdevice miscdev;
 	unsigned int counter;
+	char rx_buf[SERIAL_BUFSIZE];
 	struct platform_device *pdev;
+	wait_queue_head_t wait;
+	/* read location */
+	unsigned int buf_rd;
+	/* write location */
+	unsigned int buf_wr;
 };
 
 
@@ -74,24 +82,23 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 
 	if (val == '\n')
 		serial_write_char(serial, '\r');
-	else
-		serial->counter++;
 }
 
 
-ssize_t serial_write(struct file *file, const char __user *ubuf,
+ssize_t serial_write(struct file *f, const char __user *buf,
 		size_t sz, loff_t *off)
 {
-	struct miscdevice *miscdev_ptr = file->private_data;
+	struct miscdevice *miscdev_ptr = f->private_data;
 	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
 			miscdev);
 	u8 c;
 	int i;
 	for (i = 0; i < sz; i++) {
-		if (get_user(c, ubuf + i))
+		if (get_user(c, buf + i))
 			return -EFAULT;
 
 		serial_write_char(serial, c);
+		serial->counter++;
 	}
 	*off += sz;
 
@@ -100,7 +107,30 @@ ssize_t serial_write(struct file *file, const char __user *ubuf,
 
 ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 {
-	return -1;
+	char c;
+	int ret;
+
+	struct miscdevice *miscdev_ptr = f->private_data;
+	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
+			miscdev);
+
+	if (serial->buf_wr == serial->buf_rd) {
+		ret = wait_event_interruptible(serial->wait,
+				serial->buf_wr != serial->buf_rd);
+		if (ret)
+			return ret;
+	}
+
+
+	c = serial->rx_buf[serial->buf_rd];
+	serial->buf_rd = (serial->buf_rd + 1) % SERIAL_BUFSIZE;
+
+	if (put_user(c, buf))
+		return -EFAULT;
+
+	*off += 1;
+
+	return 1;
 }
 
 static long serial_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
@@ -134,12 +164,14 @@ static const struct file_operations serial_fops = {
 
 static irqreturn_t serial_interrupt(int irq, void *dev_id)
 {
-	u32 val;
+	int val;
 	struct serial_dev *serial = (struct serial_dev *) dev_id;
 
 	val = reg_read(serial, UART_RX);
-	pr_alert("%c\n", val);
-	pr_alert("%s called", __func__);
+	serial->rx_buf[serial->buf_wr] = val;
+	serial->buf_wr = (serial->buf_wr + 1) % SERIAL_BUFSIZE;
+
+	wake_up(&serial->wait);
 	return IRQ_HANDLED;
 }
 
@@ -182,7 +214,6 @@ static int serial_probe(struct platform_device *pdev)
 		return -1;
 	}
 
-
 	/* interrupts */
 	irq = platform_get_irq(pdev, 0);
 	ret = devm_request_irq(&pdev->dev, irq, serial_interrupt, 0, "serial",
@@ -193,6 +224,7 @@ static int serial_probe(struct platform_device *pdev)
 		return ret;
 	}
 	reg_write(serial, UART_IER_RDI, UART_IER);
+	init_waitqueue_head(&serial->wait);
 
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,

@@ -1,3 +1,7 @@
+/*
+ * A FILE I STOLE FROM eduardorighes:
+ *  https://github.com/eduardorighes/bootlin-serial-driver/blob/master/serial.c
+ */
 
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/init.h>

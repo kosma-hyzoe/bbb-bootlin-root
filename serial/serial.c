@@ -29,13 +29,12 @@ struct serial_dev {
 	void __iomem *regs;
 	struct miscdevice miscdev;
 	unsigned int counter;
-	char rx_buf[SERIAL_BUFSIZE];
 	struct platform_device *pdev;
 	wait_queue_head_t wait;
-	/* read location */
-	unsigned int buf_rd;
-	/* write location */
-	unsigned int buf_wr;
+	spinlock_t lock;
+	char rx_buf[SERIAL_BUFSIZE];
+	unsigned int buf_rd; /* read index */
+	unsigned int buf_wr; /* write index */
 };
 
 
@@ -74,6 +73,10 @@ static int config_baud_rate(struct serial_dev *serial,
 
 static void serial_write_char(struct serial_dev *serial, u8 val)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&serial->lock, flags);
+
 	/* wait until transmit hold register is empty */
 	while ((reg_read(serial, UART_LSR) & UART_LSR_THRE) == 0)
 		cpu_relax();
@@ -81,7 +84,9 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 	reg_write(serial, val, UART_TX);
 
 	if (val == '\n')
-		serial_write_char(serial, '\r');
+		serial_wri
+
+	spin_unlock_irqrestore(&serial->lock, flags);
 }
 
 
@@ -167,9 +172,13 @@ static irqreturn_t serial_interrupt(int irq, void *dev_id)
 	int val;
 	struct serial_dev *serial = (struct serial_dev *) dev_id;
 
+	spin_lock(&serial->lock);
+
 	val = reg_read(serial, UART_RX);
 	serial->rx_buf[serial->buf_wr] = val;
 	serial->buf_wr = (serial->buf_wr + 1) % SERIAL_BUFSIZE;
+
+	spin_unlock(&serial->lock);
 
 	wake_up(&serial->wait);
 	return IRQ_HANDLED;
@@ -196,6 +205,9 @@ static int serial_probe(struct platform_device *pdev)
 	/* power management */
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_get_sync(&pdev->dev);
+
+	/* spinlock init */
+	spin_lock_init(&serial->lock);
 
 	/* baud rate config */
 	ret = config_baud_rate(serial, pdev);

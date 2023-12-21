@@ -26,13 +26,16 @@
 #define SERIAL_BUFSIZE 16
 
 struct serial_dev {
-	void __iomem *regs;
 	struct miscdevice miscdev;
-	unsigned int counter;
 	struct platform_device *pdev;
+	struct device *dev;
+	struct resource *res;
+	void __iomem *regs;
+	unsigned int counter;
 	wait_queue_head_t wait;
 	spinlock_t lock;
 	char rx_buf[SERIAL_BUFSIZE];
+	char tx_buf[SERIAL_BUFSIZE];
 	unsigned int buf_rd; /* read index */
 	unsigned int buf_wr; /* write index */
 };
@@ -84,13 +87,13 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 	reg_write(serial, val, UART_TX);
 
 	if (val == '\n')
-		serial_wri
+		serial_write_char(serial, '\r');
 
 	spin_unlock_irqrestore(&serial->lock, flags);
 }
 
 
-ssize_t serial_write(struct file *f, const char __user *buf,
+ssize_t serial_write_pio(struct file *f, const char __user *buf,
 		size_t sz, loff_t *off)
 {
 	struct miscdevice *miscdev_ptr = f->private_data;
@@ -108,6 +111,29 @@ ssize_t serial_write(struct file *f, const char __user *buf,
 	*off += sz;
 
 	return sz;
+}
+
+int serial_init_dma(void)
+{
+	return 0;
+}
+
+int serial_cleanup_dma(void)
+{
+	return 0;
+}
+
+ssize_t serial_write_dma(struct file *f, const char __user *buf,
+		size_t sz, loff_t *off)
+{
+	return 0;
+}
+
+
+ssize_t serial_remove_dma(struct file *f, const char __user *buf,
+		size_t sz, loff_t *off)
+{
+	return 0;
 }
 
 ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
@@ -159,11 +185,18 @@ static long serial_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 }
 
 
-
-static const struct file_operations serial_fops = {
+static const struct file_operations serial_fops_dma = {
 	.owner = THIS_MODULE,
 	.read = serial_read,
-	.write = serial_write,
+	.write = serial_write_dma,
+	.unlocked_ioctl = serial_ioctl,
+};
+
+
+static const struct file_operations serial_fops_pio = {
+	.owner = THIS_MODULE,
+	.read = serial_read,
+	.write = serial_write_pio,
 	.unlocked_ioctl = serial_ioctl,
 };
 
@@ -201,6 +234,8 @@ static int serial_probe(struct platform_device *pdev)
 	serial->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(serial->regs))
 		return PTR_ERR(serial->regs);
+	serial->dev = &pdev->dev;
+	pr_alert("id: %d\n", serial->dev->id);
 
 	/* power management */
 	pm_runtime_enable(&pdev->dev);
@@ -225,6 +260,8 @@ static int serial_probe(struct platform_device *pdev)
 	if (!res) {
 		return -1;
 	}
+	serial->res = res;
+
 
 	/* interrupts */
 	irq = platform_get_irq(pdev, 0);
@@ -238,10 +275,18 @@ static int serial_probe(struct platform_device *pdev)
 	reg_write(serial, UART_IER_RDI, UART_IER);
 	init_waitqueue_head(&serial->wait);
 
+	/* dma */
+	ret = serial_init_dma();
+	if (ret) {
+		// todo not sure if it should be there...
+		serial_cleanup_dma();
+		return -ENODEV;
+	}
+
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
 			"serial-%x", res->start);
-	serial->miscdev.fops = &serial_fops;
+	serial->miscdev.fops = &serial_fops_pio;
 	serial->miscdev.parent = &pdev->dev;
 	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
 	misc_register(&serial->miscdev);
@@ -257,6 +302,7 @@ static int serial_remove(struct platform_device *pdev)
 	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
+	serial_cleanup_dma();
 	return 0;
 }
 

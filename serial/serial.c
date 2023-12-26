@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "asm-generic/errno-base.h"
 #include "linux/device/driver.h"
+#include "linux/dma-direction.h"
+#include "linux/err.h"
 #include "linux/irqreturn.h"
 #include "linux/limits.h"
+#include <linux/minmax.h>
 #include "linux/moduleparam.h"
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/kernel.h>
+#include <linux/types.h>
+#include <linux/atomic.h>
 
 #include <linux/of.h>
 #include <linux/pm_runtime.h>
@@ -18,12 +24,19 @@
 #include <linux/spinlock.h>
 #include <linux/sched.h>
 #include <uapi/linux/serial_reg.h>
+#include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
+#include <linux/dmapool.h>
+
 #include <linux/debugfs.h>
 
 #define SERIAL_RESET_COUNTER	0
 #define SERIAL_GET_COUNTER	1
 
 #define SERIAL_BUFSIZE 16
+
+#define OMAP_UART_SCR_DMAMODE_CTL3 0x7
+#define OMAP_UART_SCR_TX_TRIG_GRANU1 BIT(6)
 
 struct serial_dev {
 	struct miscdevice miscdev;
@@ -34,12 +47,24 @@ struct serial_dev {
 	unsigned int counter;
 	wait_queue_head_t wait;
 	spinlock_t lock;
+	struct dma_chan *txchan;
+	// struct dma_chan *rxchan;
+	int txongoing;
+	struct completion txcomplete;
+	struct dma_async_tx_descriptor *desc;
+	dma_addr_t fifo_dma_addr;
+	dma_addr_t dma_addr;
 	char rx_buf[SERIAL_BUFSIZE];
 	char tx_buf[SERIAL_BUFSIZE];
+
 	unsigned int buf_rd; /* read index */
 	unsigned int buf_wr; /* write index */
 };
 
+static struct serial_dev *file_to_serial(struct file *f)
+{
+	return container_of(f->private_data, struct serial_dev, miscdev);
+}
 
 static u32 reg_read(struct serial_dev *serial, unsigned int reg)
 {
@@ -113,19 +138,103 @@ ssize_t serial_write_pio(struct file *f, const char __user *buf,
 	return sz;
 }
 
-int serial_init_dma(void)
+int serial_init_dma(struct serial_dev *serial)
 {
+	int ret;
+	char first;
+
+	struct dma_slave_config txconf = {};
+
+
+	/* requesting the dma channels */
+	//serial->rxchan = dma_request_chan(serial->dev, "rx");
+	//if (IS_ERR(serial->rxchan)) {
+	//	dev_dbg_once(serial->dev, "DMA rx channel request failed, "
+	//			"operating without tr DMA (%ld)\n",
+	//		     PTR_ERR(serial->rxchan));
+	//	serial->rxchan = NULL;
+	//	return -ENODEV; /* no such device */
+	//}
+	serial->txchan = dma_request_chan(serial->dev, "tx");
+	if (IS_ERR(serial->txchan)) {
+		dev_dbg_once(serial->dev, "DMA tx channel request failed, "
+				"operating without tx DMA (%ld)\n",
+			     PTR_ERR(serial->txchan));
+		serial->txchan = NULL;
+		return -ENODEV;
+	}
+
+	serial->fifo_dma_addr = dma_map_resource(serial->dev,
+			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
+	ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr);
+	if (ret)
+		return -ret;
+
+	txconf.direction = DMA_MEM_TO_DEV;
+	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	txconf.dst_addr = serial->fifo_dma_addr;
+	ret = dmaengine_slave_config(serial->txchan, &txconf);
+	if (ret)
+		return -ret;
+
+	/* OMAP 8250 UART quirk: need to write the first byte manually */
+	// TODO here, or each write?
+	first = serial->tx_buf[0];
+	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
+			     DMA_TO_DEVICE);
+
+	ret = dma_mapping_error(serial->dev, serial->dma_addr);
+	if (ret)
+		return -ret;
+	serial->desc = dmaengine_prep_slave_single(serial->txchan,
+			// TODO len = serial_buffsize?
+			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
+			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+	if (!serial->desc)
+		// todo what error?
+		return -1;
+
 	return 0;
 }
 
-int serial_cleanup_dma(void)
+int serial_cleanup_dma(struct serial_dev *serial)
 {
+	dmaengine_terminate_sync(serial->txchan);
+	//dmaengine_terminate_sync(serial->rxchan);
+
+	dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
+			   0);
+	dma_release_channel(serial->txchan);
+	//dma_release_channel(serial->rxchan);
+
 	return 0;
 }
 
 ssize_t serial_write_dma(struct file *f, const char __user *buf,
 		size_t sz, loff_t *off)
 {
+	int to_copy, copied;
+	unsigned long flags;
+	struct serial_dev *serial = file_to_serial(f);
+
+	spin_lock_irqsave(&serial->lock, flags);
+	if (serial->txongoing) {
+		spin_unlock_irqrestore(&serial->lock, flags);
+		return -EBUSY;
+	}
+	serial->txongoing = true;
+	spin_unlock_irqrestore(&serial->lock, flags);
+
+	// ...
+	to_copy = min_t(size_t, sz, sizeof(serial->tx_buf));
+	copied = copy_from_user(serial->tx_buf, buf, SERIAL_BUFSIZE);
+
+	spin_lock_irqsave(&serial->lock, flags);
+	serial->txongoing = false;
+	spin_unlock_irqrestore(&serial->lock, flags);
+
+	if (to_copy - copied)
+		return -EFAULT;
 	return 0;
 }
 
@@ -220,6 +329,7 @@ static irqreturn_t serial_interrupt(int irq, void *dev_id)
 static int serial_probe(struct platform_device *pdev)
 {
 	int irq, ret;
+	int use_dma = 1;
 
 	struct serial_dev *serial;
 	struct resource *res;
@@ -251,6 +361,10 @@ static int serial_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	/* enable DMA */
+	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
+		UART_OMAP_SCR);
+
 	/* soft reset */
 	reg_write(serial, UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT, UART_FCR);
 	reg_write(serial, 0x00, UART_OMAP_MDR1);
@@ -276,17 +390,17 @@ static int serial_probe(struct platform_device *pdev)
 	init_waitqueue_head(&serial->wait);
 
 	/* dma */
-	ret = serial_init_dma();
-	if (ret) {
-		// todo not sure if it should be there...
-		serial_cleanup_dma();
-		return -ENODEV;
-	}
+	ret = serial_init_dma(serial);
+	if (ret)
+		// TODO should it really be there?
+		serial_cleanup_dma(serial);
+	else
+		use_dma = 1;
 
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
 			"serial-%x", res->start);
-	serial->miscdev.fops = &serial_fops_pio;
+	serial->miscdev.fops = use_dma ? &serial_fops_dma : &serial_fops_pio;
 	serial->miscdev.parent = &pdev->dev;
 	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
 	misc_register(&serial->miscdev);
@@ -296,13 +410,13 @@ static int serial_probe(struct platform_device *pdev)
 
 static int serial_remove(struct platform_device *pdev)
 {
-	struct serial_dev *dev = platform_get_drvdata(pdev);
+	struct serial_dev *serial = platform_get_drvdata(pdev);
 
-	misc_deregister(&dev->miscdev);
+	misc_deregister(&serial->miscdev);
 	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
-	serial_cleanup_dma();
+	serial_cleanup_dma(serial);
 	return 0;
 }
 

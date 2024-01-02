@@ -144,6 +144,7 @@ int serial_init_dma(struct serial_dev *serial)
 	char first;
 
 	struct dma_slave_config txconf = {};
+	dma_cookie_t cookie;
 
 
 	/* requesting the dma channels */
@@ -187,12 +188,18 @@ int serial_init_dma(struct serial_dev *serial)
 	if (ret)
 		return -ret;
 	serial->desc = dmaengine_prep_slave_single(serial->txchan,
-			// TODO len = serial_buffsize?
+			// TODO len = SERIAL_BUFFSIZE?
 			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!serial->desc)
-		// todo what error?
-		return -1;
+		// TODO call cleanup here?
+		return -ENOMEM;
+
+	cookie = dmaengine_submit(serial->desc);
+	ret = dma_submit_error(cookie);
+	if (ret)
+		return -EIO;
+
 
 	return 0;
 }

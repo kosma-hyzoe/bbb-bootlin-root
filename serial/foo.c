@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "asm-generic/errno-base.h"
-#include "asm/vdso/processor.h"
-#include "linux/completion.h"
 #include "linux/device/driver.h"
 #include "linux/dma-direction.h"
 #include "linux/err.h"
@@ -144,10 +142,8 @@ int serial_init_dma(struct serial_dev *serial)
 {
 	int ret;
 	char first;
-	struct completion dma_async_issue_done;
 
 	struct dma_slave_config txconf = {};
-	dma_cookie_t cookie;
 
 
 	/* requesting the dma channels */
@@ -191,27 +187,12 @@ int serial_init_dma(struct serial_dev *serial)
 	if (ret)
 		return -ret;
 	serial->desc = dmaengine_prep_slave_single(serial->txchan,
-			// TODO len = SERIAL_BUFFSIZE?
+			// TODO len = serial_buffsize?
 			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!serial->desc)
-		// TODO call cleanup here?
-		return -ENOMEM;
-
-	cookie = dmaengine_submit(serial->desc);
-	ret = dma_submit_error(cookie);
-	if (ret)
-		return -EIO;
-	dma_async_issue_pending(serial->txchan);
-	reg_write(serial, first, UART_TX);
-
-	/* init_completion(&dma_async_issue_done); */
-
-	while ( !dma_async_is_tx_complete(serial->txchan, cookie, NULL, NULL) )
-		cpu_relax();
-	/* complete(&dma_async_issue_done); */
-	dma_unmap_single();
-
+		// todo what error?
+		return -1;
 
 	return 0;
 }
@@ -348,7 +329,7 @@ static irqreturn_t serial_interrupt(int irq, void *dev_id)
 static int serial_probe(struct platform_device *pdev)
 {
 	int irq, ret;
-	int use_dma = 0;
+	int use_dma = 1;
 
 	struct serial_dev *serial;
 	struct resource *res;
@@ -410,11 +391,11 @@ static int serial_probe(struct platform_device *pdev)
 
 	/* dma */
 	ret = serial_init_dma(serial);
-	if (!ret)
+	if (ret)
+		// TODO should it really be there?
+		serial_cleanup_dma(serial);
+	else
 		use_dma = 1;
-
-	if (use_dma)
-		pr_alert("Serial intied with DMA...");
 
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,

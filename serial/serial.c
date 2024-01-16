@@ -173,6 +173,10 @@ int serial_init_dma(struct serial_dev *serial)
 	ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr);
 	if (ret)
 		return -ret;
+	// TODO which gfp flag?
+	dma_alloc_coherent(serial->dev, SERIAL_BUFSIZE, &serial->fifo_dma_addr,
+			GFP_KERNEL);
+
 
 	txconf.direction = DMA_MEM_TO_DEV;
 	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
@@ -184,6 +188,7 @@ int serial_init_dma(struct serial_dev *serial)
 	/* OMAP 8250 UART quirk: need to write the first byte manually */
 	// TODO here, or each write?
 	first = serial->tx_buf[0];
+	// grants control from CPU to DMA hardware
 	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
 			     DMA_TO_DEVICE);
 

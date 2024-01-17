@@ -63,7 +63,6 @@ struct serial_dev {
 	unsigned int buf_wr; /* write index */
 };
 
-
 static struct serial_dev *file_to_serial(struct file *f)
 {
 	return container_of(f->private_data, struct serial_dev, miscdev);
@@ -158,7 +157,6 @@ int serial_init_dma(struct serial_dev *serial)
 		serial->txchan = NULL;
 		return -ENODEV;
 	}
-	pr_alert("1");
 
 	serial->fifo_dma_addr = dma_map_resource(serial->dev,
 			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
@@ -166,19 +164,18 @@ int serial_init_dma(struct serial_dev *serial)
 	if (ret)
 		return -ret;
 	// TODO which gfp flag?
-	alloc_ret = dma_alloc_coherent(serial->dev, SERIAL_BUFSIZE,
-				 &serial->fifo_dma_addr, GFP_KERNEL);
-	if (!alloc_ret)
-		return -ENOMEM;
 
-	pr_alert("2");
 
 	txconf.direction = DMA_MEM_TO_DEV;
 	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
 	txconf.dst_addr = serial->fifo_dma_addr;
 	ret = dmaengine_slave_config(serial->txchan, &txconf);
-	if (ret)
+	if (ret < 0) {
+		dma_release_channel(serial->txchan);
 		return -ret;
+	}
+	init_completion(&serial->dma_async_issue_done);
+
 
 	/* OMAP 8250 UART quirk: need to write the first byte manually */
 	// TODO here, or each write?
@@ -187,7 +184,6 @@ int serial_init_dma(struct serial_dev *serial)
 	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
 			     DMA_TO_DEVICE);
 
-	pr_alert("3");
 	ret = dma_mapping_error(serial->dev, serial->dma_addr);
 	if (ret)
 		return -ret;
@@ -198,20 +194,15 @@ int serial_init_dma(struct serial_dev *serial)
 	if (!serial->desc)
 		return -ENOMEM;
 
-	pr_alert("4");
 	cookie = dmaengine_submit(serial->desc);
-	pr_alert("5");
 	ret = dma_submit_error(cookie);
 	if (ret) {
+		dma_release_channel(serial->txchan);
 		return -EIO;
 	}
-	pr_alert("foo");
 
 	dma_async_issue_pending(serial->txchan);
 	reg_write(serial, first, UART_TX);
-
-	complete(&serial->dma_async_issue_done);
-	pr_alert("c");
 
 	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE);
 
@@ -243,7 +234,7 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 		spin_unlock_irqrestore(&serial->lock, flags);
 		return -EBUSY;
 	}
-	serial->txongoing = true;
+	serial->txongoing = 1;
 	spin_unlock_irqrestore(&serial->lock, flags);
 
 	// ...
@@ -344,11 +335,14 @@ static irqreturn_t serial_interrupt(int irq, void *dev_id)
 static int serial_probe(struct platform_device *pdev)
 {
 	int irq, ret;
-	int use_dma = 0;
+	int use_dma;
 
 	struct serial_dev *serial;
 	struct resource *res;
 
+	use_dma = 0;
+
+	pr_alert("%d", use_dma);
 	/* allocation and pointer madness */
 	serial = devm_kzalloc(&pdev->dev, sizeof(*serial), GFP_KERNEL);
 	if (!serial)
@@ -360,7 +354,6 @@ static int serial_probe(struct platform_device *pdev)
 	if (IS_ERR(serial->regs))
 		return PTR_ERR(serial->regs);
 	serial->dev = &pdev->dev;
-	pr_alert("id: %d\n", serial->dev->id);
 
 	/* power management */
 	pm_runtime_enable(&pdev->dev);
@@ -405,14 +398,10 @@ static int serial_probe(struct platform_device *pdev)
 	init_waitqueue_head(&serial->wait);
 
 	/* dma */
-	init_completion(&serial->dma_async_issue_done);
-	pr_alert("a");
 	ret = serial_init_dma(serial);
-	if (!ret) {
-		wait_for_completion(&serial->dma_async_issue_done);
+	if (!ret)
 		use_dma = 1;
-	}
-	pr_alert("b");
+
 
 	if (use_dma)
 		pr_alert("Serial intied with DMA...");
@@ -425,6 +414,7 @@ static int serial_probe(struct platform_device *pdev)
 	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
 	misc_register(&serial->miscdev);
 
+	pr_info("Device registered with name: %s\n", serial->miscdev.name);
 	return 0;
 }
 

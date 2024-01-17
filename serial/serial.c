@@ -425,7 +425,7 @@ static int serial_probe(struct platform_device *pdev)
 		pr_alert("Serial intied with DMA...");
 
 	/* miscdev pointer madness and registration */
-	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
+	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_ATOMIC,
 			"serial-%x", res->start);
 	serial->miscdev.fops = use_dma ? &serial_fops_dma : &serial_fops_pio;
 	serial->miscdev.parent = &pdev->dev;

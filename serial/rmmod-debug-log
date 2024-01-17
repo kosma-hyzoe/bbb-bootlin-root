@@ -1,0 +1,41 @@
+[ 1272.625686] 8<--- cut here ---
+[ 1272.628814] Unable to handle kernel NULL pointer dereference at virtual address 00000000
+[ 1272.637354] pgd = 960bc0e4
+[ 1272.640198] [00000000] *pgd=83d45831, *pte=00000000, *ppte=00000000
+[ 1272.646581] Internal error: Oops: 17 [#1] SMP ARM
+[ 1272.651311] Modules linked in: serial(O-)
+[ 1272.655363] CPU: 0 PID: 122 Comm: rmmod Tainted: G           O      5.10.0-00021-g178901ee8439 #16
+[ 1272.664361] Hardware name: Generic AM33XX (Flattened Device Tree)
+[ 1272.670500] PC is at serial_cleanup_dma+0x10/0x90 [serial]
+[ 1272.676015] LR is at serial_remove+0x28/0x30 [serial]
+[ 1272.681090] pc : [<bf000acc>]    lr : [<bf000b74>]    psr: 60000013
+[ 1272.687385] sp : c3cf1ee8  ip : 852ad36b  fp : 00000000
+[ 1272.692633] r10: 00000081  r9 : c3cf0000  r8 : c31e48a0
+[ 1272.697882] r7 : bf002014  r6 : c31e4810  r5 : 00000000  r4 : c3c29240
+[ 1272.704439] r3 : c3cf0000  r2 : 00000000  r1 : 65ea0094  r0 : c3c29240
+[ 1272.710999] Flags: nZCv  IRQs on  FIQs on  Mode SVC_32  ISA ARM  Segment none
+[ 1272.718167] Control: 10c5387d  Table: 83e60019  DAC: 00000051
+[ 1272.723941] Process rmmod (pid: 122, stack limit = 0xa56cb957)
+[ 1272.729801] Stack: (0xc3cf1ee8 to 0xc3cf2000)
+[ 1272.734182] 1ee0:                   c3c29240 c31e4810 bf002014 c340f800 c3c29240 bf000b74
+[ 1272.742402] 1f00: c340f810 c340f810 c31e4810 c07231b8 c340f810 bf002014 c31e4810 c072084c
+[ 1272.750621] 1f20: c340f810 bf002014 c31e4810 c340f8a0 c0100244 c072188c bf002014 bf002080
+[ 1272.758840] 1f40: 00000880 00000081 c0100244 c0720020 00000000 c020f2a8 69726573 00006c61
+[ 1272.767059] 1f60: b6f2d000 00000017 c110f610 b6ecc084 c3cf1fb0 c0b0b944 00000000 00000002
+[ 1272.775279] 1f80: c010017c c107119c c110963c c0260da0 00029a40 ad0e757f 00029a40 69726573
+[ 1272.783498] 1fa0: b6006c61 c0100080 00029a40 69726573 be8d1be8 00000880 be8d1be8 00000880
+[ 1272.791718] 1fc0: 00029a40 69726573 b6006c61 00000081 00000000 00000000 b6f2d000 00000000
+[ 1272.799937] 1fe0: be8d1be0 be8d1bd0 00029928 b6e75020 60000010 be8d1be8 00000000 00000000
+[ 1272.808170] [<bf000acc>] (serial_cleanup_dma [serial]) from [<bf000b74>] (serial_remove+0x28/0x30 [serial])
+[ 1272.817977] [<bf000b74>] (serial_remove [serial]) from [<c07231b8>] (platform_drv_remove+0x24/0x3c)
+[ 1272.827074] [<c07231b8>] (platform_drv_remove) from [<c072084c>] (__device_release_driver+0x15c/0x220)
+[ 1272.836430] [<c072084c>] (__device_release_driver) from [<c072188c>] (driver_detach+0xc8/0xfc)
+[ 1272.845085] [<c072188c>] (driver_detach) from [<c0720020>] (bus_remove_driver+0x4c/0xa0)
+[ 1272.853230] [<c0720020>] (bus_remove_driver) from [<c020f2a8>] (sys_delete_module+0x19c/0x268)
+[ 1272.861891] [<c020f2a8>] (sys_delete_module) from [<c0100080>] (ret_fast_syscall+0x0/0x28)
+[ 1272.870192] Exception stack(0xc3cf1fa8 to 0xc3cf1ff0)
+[ 1272.875269] 1fa0:                   00029a40 69726573 be8d1be8 00000880 be8d1be8 00000880
+[ 1272.883489] 1fc0: 00029a40 69726573 b6006c61 00000081 00000000 00000000 b6f2d000 00000000
+[ 1272.891704] 1fe0: be8d1be0 be8d1bd0 00029928 b6e75020
+[ 1272.896787] Code: e92d4030 e1a04000 e590508c e24dd00c (e5953000)
+[ 1272.902981] ---[ end trace 071e480abd4cf40a ]---

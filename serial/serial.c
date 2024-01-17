@@ -63,6 +63,8 @@ struct serial_dev {
 	unsigned int buf_wr; /* write index */
 };
 
+static int use_dma = 0;
+
 static struct serial_dev *file_to_serial(struct file *f)
 {
 	return container_of(f->private_data, struct serial_dev, miscdev);
@@ -335,7 +337,6 @@ static irqreturn_t serial_interrupt(int irq, void *dev_id)
 static int serial_probe(struct platform_device *pdev)
 {
 	int irq, ret;
-	int use_dma;
 
 	struct serial_dev *serial;
 	struct resource *res;
@@ -426,7 +427,8 @@ static int serial_remove(struct platform_device *pdev)
 	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
-	serial_cleanup_dma(serial);
+	if (use_dma)
+		serial_cleanup_dma(serial);
 	return 0;
 }
 

@@ -52,8 +52,8 @@ struct serial_dev {
 	struct dma_chan *txchan;
 	// struct dma_chan *rxchan;
 	int txongoing;
-	struct completion txcomplete;
 	struct dma_async_tx_descriptor *desc;
+	struct completion dma_async_issue_done;
 	dma_addr_t fifo_dma_addr;
 	dma_addr_t dma_addr;
 	char rx_buf[SERIAL_BUFSIZE];
@@ -62,6 +62,7 @@ struct serial_dev {
 	unsigned int buf_rd; /* read index */
 	unsigned int buf_wr; /* write index */
 };
+
 
 static struct serial_dev *file_to_serial(struct file *f)
 {
@@ -142,22 +143,13 @@ ssize_t serial_write_pio(struct file *f, const char __user *buf,
 int serial_init_dma(struct serial_dev *serial)
 {
 	int ret;
+	void * alloc_ret;
 	char first;
-	struct completion dma_async_issue_done;
 
 	struct dma_slave_config txconf = {};
 	dma_cookie_t cookie;
 
-
 	/* requesting the dma channels */
-	//serial->rxchan = dma_request_chan(serial->dev, "rx");
-	//if (IS_ERR(serial->rxchan)) {
-	//	dev_dbg_once(serial->dev, "DMA rx channel request failed, "
-	//			"operating without tr DMA (%ld)\n",
-	//		     PTR_ERR(serial->rxchan));
-	//	serial->rxchan = NULL;
-	//	return -ENODEV; /* no such device */
-	//}
 	serial->txchan = dma_request_chan(serial->dev, "tx");
 	if (IS_ERR(serial->txchan)) {
 		dev_dbg_once(serial->dev, "DMA tx channel request failed, "
@@ -174,8 +166,10 @@ int serial_init_dma(struct serial_dev *serial)
 	if (ret)
 		return -ret;
 	// TODO which gfp flag?
-	dma_alloc_coherent(serial->dev, SERIAL_BUFSIZE, &serial->fifo_dma_addr,
-			GFP_KERNEL);
+	alloc_ret = dma_alloc_coherent(serial->dev, SERIAL_BUFSIZE,
+				 &serial->fifo_dma_addr, GFP_KERNEL);
+	if (!alloc_ret)
+		return -ENOMEM;
 
 	pr_alert("2");
 
@@ -202,22 +196,22 @@ int serial_init_dma(struct serial_dev *serial)
 			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!serial->desc)
-		// TODO call cleanup here?
 		return -ENOMEM;
 
 	pr_alert("4");
 	cookie = dmaengine_submit(serial->desc);
 	pr_alert("5");
 	ret = dma_submit_error(cookie);
-	if (ret)
+	if (ret) {
 		return -EIO;
+	}
 	pr_alert("foo");
-	/* init_completion(&dma_async_issue_done); */
 
 	dma_async_issue_pending(serial->txchan);
 	reg_write(serial, first, UART_TX);
 
-	/* wait_for_completion(&dma_async_issue_done); */
+	complete(&serial->dma_async_issue_done);
+	pr_alert("c");
 
 	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE);
 
@@ -265,12 +259,6 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	return 0;
 }
 
-
-ssize_t serial_remove_dma(struct file *f, const char __user *buf,
-		size_t sz, loff_t *off)
-{
-	return 0;
-}
 
 ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 {
@@ -417,9 +405,14 @@ static int serial_probe(struct platform_device *pdev)
 	init_waitqueue_head(&serial->wait);
 
 	/* dma */
+	init_completion(&serial->dma_async_issue_done);
+	pr_alert("a");
 	ret = serial_init_dma(serial);
-	if (!ret)
+	if (!ret) {
+		wait_for_completion(&serial->dma_async_issue_done);
 		use_dma = 1;
+	}
+	pr_alert("b");
 
 	if (use_dma)
 		pr_alert("Serial intied with DMA...");

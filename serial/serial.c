@@ -113,9 +113,6 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 
 	reg_write(serial, val, UART_TX);
 
-	if (val == '\n')
-		serial_write_char(serial, '\r');
-
 	spin_unlock_irqrestore(&serial->lock, flags);
 }
 
@@ -134,6 +131,8 @@ ssize_t serial_write_pio(struct file *f, const char __user *buf,
 
 		serial_write_char(serial, c);
 		serial->counter++;
+		if (c == '\n')
+			serial_write_char(serial, '\r');
 	}
 	*off += sz;
 

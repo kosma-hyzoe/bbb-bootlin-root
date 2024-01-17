@@ -167,6 +167,7 @@ int serial_init_dma(struct serial_dev *serial)
 		serial->txchan = NULL;
 		return -ENODEV;
 	}
+	pr_alert("1");
 
 	serial->fifo_dma_addr = dma_map_resource(serial->dev,
 			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
@@ -177,6 +178,7 @@ int serial_init_dma(struct serial_dev *serial)
 	dma_alloc_coherent(serial->dev, SERIAL_BUFSIZE, &serial->fifo_dma_addr,
 			GFP_KERNEL);
 
+	pr_alert("2");
 
 	txconf.direction = DMA_MEM_TO_DEV;
 	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
@@ -192,6 +194,7 @@ int serial_init_dma(struct serial_dev *serial)
 	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
 			     DMA_TO_DEVICE);
 
+	pr_alert("3");
 	ret = dma_mapping_error(serial->dev, serial->dma_addr);
 	if (ret)
 		return -ret;
@@ -203,20 +206,21 @@ int serial_init_dma(struct serial_dev *serial)
 		// TODO call cleanup here?
 		return -ENOMEM;
 
+	pr_alert("4");
 	cookie = dmaengine_submit(serial->desc);
+	pr_alert("5");
 	ret = dma_submit_error(cookie);
 	if (ret)
 		return -EIO;
+	pr_alert("foo");
+	/* init_completion(&dma_async_issue_done); */
+
 	dma_async_issue_pending(serial->txchan);
 	reg_write(serial, first, UART_TX);
 
-	/* init_completion(&dma_async_issue_done); */
+	/* wait_for_completion(&dma_async_issue_done); */
 
-	while ( !dma_async_is_tx_complete(serial->txchan, cookie, NULL, NULL) )
-		cpu_relax();
-	/* complete(&dma_async_issue_done); */
-	dma_unmap_single();
-
+	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE);
 
 	return 0;
 }

@@ -153,57 +153,56 @@ int serial_init_dma(struct serial_dev *serial)
 	if (IS_ERR(serial->txchan)) {
 		pr_alert("DMA tx channel %ld request failed.",
 				PTR_ERR(serial->txchan));
-		dma_release_channel(serial->txchan);
 		return -ENODEV;
 	}
 
-	serial->fifo_dma_addr = dma_map_resource(serial->dev,
-			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
-	ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr);
-	if (ret)
-		return -ret;
-	// TODO which gfp flag?
+	/* serial->fifo_dma_addr = dma_map_resource(serial->dev, */
+	/* 		serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0); */
+	/* ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr); */
+	/* if (ret) */
+	/* 	return -ret; */
+	/* // TODO which gfp flag? */
 
 
-	txconf.direction = DMA_MEM_TO_DEV;
-	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
-	txconf.dst_addr = serial->fifo_dma_addr;
-	ret = dmaengine_slave_config(serial->txchan, &txconf);
-	if (ret < 0) {
-		dma_release_channel(serial->txchan);
-		return -ret;
-	}
-	init_completion(&serial->dma_async_issue_done);
+	/* txconf.direction = DMA_MEM_TO_DEV; */
+	/* txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE; */
+	/* txconf.dst_addr = serial->fifo_dma_addr; */
+	/* ret = dmaengine_slave_config(serial->txchan, &txconf); */
+	/* if (ret < 0) { */
+	/* 	dma_release_channel(serial->txchan); */
+	/* 	return -ret; */
+	/* } */
+	/* init_completion(&serial->dma_async_issue_done); */
 
 
-	/* OMAP 8250 UART quirk: need to write the first byte manually */
-	// TODO here, or each write?
-	first = serial->tx_buf[0];
-	// grants control from CPU to DMA hardware
-	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
-			     DMA_TO_DEVICE);
+	/* /1* OMAP 8250 UART quirk: need to write the first byte manually *1/ */
+	/* // TODO here, or each write? */
+	/* first = serial->tx_buf[0]; */
+	/* // grants control from CPU to DMA hardware */
+	/* serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE, */
+	/* 		     DMA_TO_DEVICE); */
 
-	ret = dma_mapping_error(serial->dev, serial->dma_addr);
-	if (ret)
-		return -ret;
-	serial->desc = dmaengine_prep_slave_single(serial->txchan,
-			// TODO len = SERIAL_BUFFSIZE?
-			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
-			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
-	if (!serial->desc)
-		return -ENOMEM;
+	/* ret = dma_mapping_error(serial->dev, serial->dma_addr); */
+	/* if (ret) */
+	/* 	return -ret; */
+	/* serial->desc = dmaengine_prep_slave_single(serial->txchan, */
+	/* 		// TODO len = SERIAL_BUFFSIZE? */
+	/* 		serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV, */
+	/* 		DMA_PREP_INTERRUPT | DMA_CTRL_ACK); */
+	/* if (!serial->desc) */
+	/* 	return -ENOMEM; */
 
-	cookie = dmaengine_submit(serial->desc);
-	ret = dma_submit_error(cookie);
-	if (ret) {
-		dma_release_channel(serial->txchan);
-		return -EIO;
-	}
+	/* cookie = dmaengine_submit(serial->desc); */
+	/* ret = dma_submit_error(cookie); */
+	/* if (ret) { */
+	/* 	dma_release_channel(serial->txchan); */
+	/* 	return -EIO; */
+	/* } */
 
-	dma_async_issue_pending(serial->txchan);
-	reg_write(serial, first, UART_TX);
+	/* dma_async_issue_pending(serial->txchan); */
+	/* reg_write(serial, first, UART_TX); */
 
-	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE);
+	/* dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE); */
 
 	return 0;
 }
@@ -396,8 +395,7 @@ static int serial_probe(struct platform_device *pdev)
 	init_waitqueue_head(&serial->wait);
 
 	/* dma */
-	dma_release_channel(serial->txchan);
-	/* ret = serial_init_dma(serial); */
+	ret = serial_init_dma(serial);
 	/* if (!ret) */
 	/* 	use_dma = 1; */
 
@@ -425,8 +423,7 @@ static int serial_remove(struct platform_device *pdev)
 	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
-	if (use_dma)
-		serial_cleanup_dma(serial);
+	/* serial_cleanup_dma(serial); */
 	return 0;
 }
 

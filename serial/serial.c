@@ -50,7 +50,6 @@ struct serial_dev {
 	wait_queue_head_t wait;
 	spinlock_t lock;
 	struct dma_chan *txchan;
-	// struct dma_chan *rxchan;
 	int txongoing;
 	struct dma_async_tx_descriptor *desc;
 	struct completion dma_async_issue_done;
@@ -154,17 +153,16 @@ int serial_init_dma(struct serial_dev *serial)
 	if (IS_ERR(serial->txchan)) {
 		pr_alert("DMA tx channel %ld request failed.",
 				PTR_ERR(serial->txchan));
-		dma_release_channel(serial->txchan);
 		return -ENODEV;
 	}
 
 	serial->fifo_dma_addr = dma_map_resource(serial->dev,
 			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
 	ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr);
-	if (ret)
+	if (ret) {
+		pr_alert("Not enough memory to map DMA Resource");
 		return -ret;
-	// TODO which gfp flag?
-
+	}
 
 	txconf.direction = DMA_MEM_TO_DEV;
 	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
@@ -174,37 +172,40 @@ int serial_init_dma(struct serial_dev *serial)
 		dma_release_channel(serial->txchan);
 		return -ret;
 	}
-	init_completion(&serial->dma_async_issue_done);
-
 
 	/* OMAP 8250 UART quirk: need to write the first byte manually */
-	// TODO here, or each write?
 	first = serial->tx_buf[0];
-	// grants control from CPU to DMA hardware
+	pr_alert("first char: %c", first);
+
+	/* grants control from CPU to DMA hardware */
 	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
 			     DMA_TO_DEVICE);
-
 	ret = dma_mapping_error(serial->dev, serial->dma_addr);
 	if (ret)
 		return -ret;
 	serial->desc = dmaengine_prep_slave_single(serial->txchan,
-			// TODO len = SERIAL_BUFFSIZE?
 			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
-	if (!serial->desc)
-		return -ENOMEM;
+	if (!serial->desc) {
+		pr_alert("failed to allcoate DMA descriptor");
+		return -EIO;
+	}
 
 	cookie = dmaengine_submit(serial->desc);
 	ret = dma_submit_error(cookie);
 	if (ret) {
-		dma_release_channel(serial->txchan);
-		return -EIO;
+		pr_alert("failed to submit damengine cookie");
+		return ret;
 	}
 
+	// TODO supposedly I should use some wait_for_complete() here. why? how?
+	// looks like it's a one-thread kind of deal, unless uart4 and uart2
+	// init could clash...
 	dma_async_issue_pending(serial->txchan);
 	reg_write(serial, first, UART_TX);
 
-	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE);
+	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE,
+			 DMA_TO_DEVICE);
 
 	return 0;
 }
@@ -212,12 +213,10 @@ int serial_init_dma(struct serial_dev *serial)
 int serial_cleanup_dma(struct serial_dev *serial)
 {
 	dmaengine_terminate_sync(serial->txchan);
-	//dmaengine_terminate_sync(serial->rxchan);
 
 	dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
 			   0);
 	dma_release_channel(serial->txchan);
-	//dma_release_channel(serial->rxchan);
 
 	return 0;
 }
@@ -237,7 +236,6 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	serial->txongoing = 1;
 	spin_unlock_irqrestore(&serial->lock, flags);
 
-	// ...
 	to_copy = min_t(size_t, sz, sizeof(serial->tx_buf));
 	copied = copy_from_user(serial->tx_buf, buf, SERIAL_BUFSIZE);
 
@@ -398,17 +396,12 @@ static int serial_probe(struct platform_device *pdev)
 
 	/* dma */
 	ret = serial_init_dma(serial);
-	if (!ret)
-		use_dma = 1;
-
-
-	if (use_dma)
-		pr_alert("Serial intied with DMA...");
+	pr_alert("Serial intied with%s DMA...", !ret ? "" : "out");
 
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_ATOMIC,
 			"serial-%x", res->start);
-	serial->miscdev.fops = use_dma ? &serial_fops_dma : &serial_fops_pio;
+	serial->miscdev.fops = !ret ? &serial_fops_dma : &serial_fops_pio;
 	serial->miscdev.parent = &pdev->dev;
 	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
 	misc_register(&serial->miscdev);

@@ -1,12 +1,21 @@
-/*
- * A FILE I STOLE FROM eduardorighes:
- *  https://github.com/eduardorighes/bootlin-serial-driver/blob/master/serial.c
- */
-
 // SPDX-License-Identifier: GPL-2.0
+#include "asm-generic/errno-base.h"
+#include "asm/vdso/processor.h"
+#include "linux/completion.h"
+#include "linux/device/driver.h"
+#include "linux/dma-direction.h"
+#include "linux/err.h"
+#include "linux/irqreturn.h"
+#include "linux/limits.h"
+#include <linux/minmax.h>
+#include "linux/moduleparam.h"
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/kernel.h>
+#include <linux/types.h>
+#include <linux/atomic.h>
+
 #include <linux/of.h>
 #include <linux/pm_runtime.h>
 #include <linux/io.h>
@@ -17,157 +26,270 @@
 #include <linux/spinlock.h>
 #include <linux/sched.h>
 #include <uapi/linux/serial_reg.h>
+#include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
+#include <linux/dmapool.h>
+
 #include <linux/debugfs.h>
 
-#define SERIAL_RESET_COUNTER  0
-#define SERIAL_GET_TX_COUNTER 1
-#define SERIAL_GET_RX_COUNTER 2
+#define SERIAL_RESET_COUNTER	0
+#define SERIAL_GET_COUNTER	1
 
-#define SERIAL_BUFSIZE 64
+#define SERIAL_BUFSIZE 16
+
+#define OMAP_UART_SCR_DMAMODE_CTL3 0x7
+#define OMAP_UART_SCR_TX_TRIG_GRANU1 BIT(6)
 
 struct serial_dev {
-	struct platform_device *pdev;
 	struct miscdevice miscdev;
+	struct platform_device *pdev;
+	struct device *dev;
+	struct resource *res;
 	void __iomem *regs;
-	unsigned int tx_counter; /*TODO: this should be 64-bit */
-	unsigned int rx_counter; /*TODO: this should be 64-bit */
-	int irq;
-	char buffer[SERIAL_BUFSIZE];
-	int buf_rd;
-	int buf_wr;
-	wait_queue_head_t serial_wait;
+	unsigned int counter;
+	wait_queue_head_t wait;
 	spinlock_t lock;
-	struct dentry *debugfs_dir;
+	struct dma_chan *txchan;
+	int txongoing;
+	struct dma_async_tx_descriptor *desc;
+	struct completion dma_async_issue_done;
+	dma_addr_t fifo_dma_addr;
+	dma_addr_t dma_addr;
+	char rx_buf[SERIAL_BUFSIZE];
+	char tx_buf[SERIAL_BUFSIZE];
+
+	unsigned int buf_rd; /* read index */
+	unsigned int buf_wr; /* write index */
 };
 
-static struct serial_dev *file_to_serial(struct file *filp)
+static int use_dma = 0;
+
+static struct serial_dev *file_to_serial(struct file *f)
 {
-	return container_of(filp->private_data, struct serial_dev, miscdev);
+	return container_of(f->private_data, struct serial_dev, miscdev);
 }
 
-static u32 reg_read(struct serial_dev *dev, off_t offset)
+static u32 reg_read(struct serial_dev *serial, unsigned int reg)
 {
-	return readl(dev->regs + (offset << 2));
+	return *(u32 *)(serial->regs + (reg << 2));
 }
 
-static void reg_write(struct serial_dev *dev, u32 val, off_t offset)
+static void reg_write(struct serial_dev *serial, u32 val, unsigned int reg)
 {
-	writel(val, dev->regs + (offset << 2));
+	*(u32 *)(serial->regs + (reg << 2)) = val;
 }
 
-static int serial_configure_baud_rate(
-	struct platform_device *pdev,
-	struct serial_dev *dev)
+static int config_baud_rate(struct serial_dev *serial,
+		struct platform_device *pdev)
 {
-	u32 uartclk, baud_divisor;
 	int ret;
-
-	/* configure baud rate to 115200 */
-
+	unsigned int baud_divisor, uartclk;
 	ret = of_property_read_u32(pdev->dev.of_node, "clock-frequency",
-		&uartclk);
-	if (ret < 0) {
+			&uartclk);
+	if (ret <  0) {
 		dev_err(&pdev->dev,
-			"failed to get clock-frequency property (%d)\n", ret);
+			"clock-frequency property not found in Device Tree\n");
 		return ret;
 	}
 	baud_divisor = uartclk / 16 / 115200;
-	reg_write(dev, 0x07, UART_OMAP_MDR1);
-	reg_write(dev, 0x00, UART_LCR);
-	reg_write(dev, UART_LCR_DLAB, UART_LCR);
-	reg_write(dev, baud_divisor & 0xff, UART_DLL);
-	reg_write(dev, (baud_divisor >> 8) & 0xff, UART_DLM);
-	reg_write(dev, UART_LCR_WLEN8, UART_LCR);
+	reg_write(serial, 0x07, UART_OMAP_MDR1);
+	reg_write(serial, 0x00, UART_LCR);
+	reg_write(serial, UART_LCR_DLAB, UART_LCR);
+	reg_write(serial, baud_divisor & 0xff, UART_DLL);
+	reg_write(serial, (baud_divisor >> 8) & 0xff, UART_DLM);
+	reg_write(serial, UART_LCR_WLEN8, UART_LCR);
 
 	return 0;
 }
 
-static void serial_write_char(struct serial_dev *dev, u8 val)
+static void serial_write_char(struct serial_dev *serial, u8 val)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&dev->lock, flags);
+	spin_lock_irqsave(&serial->lock, flags);
 
-	while ((reg_read(dev, UART_LSR) & UART_LSR_THRE) == 0)
+	/* wait until transmit hold register is empty */
+	while ((reg_read(serial, UART_LSR) & UART_LSR_THRE) == 0)
 		cpu_relax();
 
-	reg_write(dev, val, UART_TX);
+	reg_write(serial, val, UART_TX);
 
-	spin_unlock_irqrestore(&dev->lock, flags);
+	spin_unlock_irqrestore(&serial->lock, flags);
 }
 
-static ssize_t serial_read( struct file *filp, char __user *buf,
-	size_t bufsize, loff_t *ppos)
+
+ssize_t serial_write_pio(struct file *f, const char __user *buf,
+		size_t sz, loff_t *off)
+{
+	struct miscdevice *miscdev_ptr = f->private_data;
+	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
+			miscdev);
+	u8 c;
+	int i;
+	for (i = 0; i < sz; i++) {
+		if (get_user(c, buf + i))
+			return -EFAULT;
+
+		serial_write_char(serial, c);
+		serial->counter++;
+		if (c == '\n')
+			serial_write_char(serial, '\r');
+	}
+	*off += sz;
+
+	return sz;
+}
+
+int serial_init_dma(struct serial_dev *serial)
 {
 	int ret;
-	struct serial_dev *dev = file_to_serial(filp);
-	char ch;
-	unsigned long flags;
+	char first;
 
-retry:
-	ret = wait_event_interruptible(dev->serial_wait, dev->buf_wr != dev->buf_rd);
-	if (ret)
-		return ret;
+	struct dma_slave_config txconf = {};
+	dma_cookie_t cookie;
 
-	spin_lock_irqsave(&dev->lock, flags);
-
-	if (dev->buf_wr == dev->buf_rd) {
-		/* if we get the lock and the buffer is empty, release lock */
-		spin_unlock_irqrestore(&dev->lock, flags);
-		goto retry;
+	/* requesting the dma channels */
+	serial->txchan = dma_request_chan(serial->dev, "tx");
+	if (IS_ERR(serial->txchan)) {
+		pr_alert("DMA tx channel %ld request failed.",
+				PTR_ERR(serial->txchan));
+		dma_release_channel(serial->txchan);
+		return -ENODEV;
 	}
 
-	ch = dev->buffer[dev->buf_rd];
-	dev->buf_rd = (dev->buf_rd + 1) % SERIAL_BUFSIZE;
-	++dev->rx_counter;
+	serial->fifo_dma_addr = dma_map_resource(serial->dev,
+			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
+	ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr);
+	if (ret)
+		return -ret;
+	// TODO which gfp flag?
 
-	spin_unlock_irqrestore(&dev->lock, flags);
 
-	if (put_user(ch, buf))
+	txconf.direction = DMA_MEM_TO_DEV;
+	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	txconf.dst_addr = serial->fifo_dma_addr;
+	ret = dmaengine_slave_config(serial->txchan, &txconf);
+	if (ret < 0) {
+		dma_release_channel(serial->txchan);
+		return -ret;
+	}
+	init_completion(&serial->dma_async_issue_done);
+
+
+	/* OMAP 8250 UART quirk: need to write the first byte manually */
+	// TODO here, or each write?
+	first = serial->tx_buf[0];
+	// grants control from CPU to DMA hardware
+	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
+			     DMA_TO_DEVICE);
+
+	ret = dma_mapping_error(serial->dev, serial->dma_addr);
+	if (ret)
+		return -ret;
+	serial->desc = dmaengine_prep_slave_single(serial->txchan,
+			// TODO len = SERIAL_BUFFSIZE?
+			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
+			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+	if (!serial->desc)
+		return -ENOMEM;
+
+	cookie = dmaengine_submit(serial->desc);
+	ret = dma_submit_error(cookie);
+	if (ret) {
+		dma_release_channel(serial->txchan);
+		return -EIO;
+	}
+
+	dma_async_issue_pending(serial->txchan);
+	reg_write(serial, first, UART_TX);
+
+	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE, DMA_TO_DEVICE);
+
+	return 0;
+}
+
+int serial_cleanup_dma(struct serial_dev *serial)
+{
+	dmaengine_terminate_sync(serial->txchan);
+	//dmaengine_terminate_sync(serial->rxchan);
+
+	dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
+			   0);
+	dma_release_channel(serial->txchan);
+	//dma_release_channel(serial->rxchan);
+
+	return 0;
+}
+
+ssize_t serial_write_dma(struct file *f, const char __user *buf,
+		size_t sz, loff_t *off)
+{
+	int to_copy, copied;
+	unsigned long flags;
+	struct serial_dev *serial = file_to_serial(f);
+
+	spin_lock_irqsave(&serial->lock, flags);
+	if (serial->txongoing) {
+		spin_unlock_irqrestore(&serial->lock, flags);
+		return -EBUSY;
+	}
+	serial->txongoing = 1;
+	spin_unlock_irqrestore(&serial->lock, flags);
+
+	// ...
+	to_copy = min_t(size_t, sz, sizeof(serial->tx_buf));
+	copied = copy_from_user(serial->tx_buf, buf, SERIAL_BUFSIZE);
+
+	spin_lock_irqsave(&serial->lock, flags);
+	serial->txongoing = false;
+	spin_unlock_irqrestore(&serial->lock, flags);
+
+	if (to_copy - copied)
 		return -EFAULT;
-	*ppos += 1;
+	return 0;
+}
 
+
+ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
+{
+	char c;
+	int ret;
+
+	struct miscdevice *miscdev_ptr = f->private_data;
+	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
+			miscdev);
+
+	if (serial->buf_wr == serial->buf_rd) {
+		ret = wait_event_interruptible(serial->wait,
+				serial->buf_wr != serial->buf_rd);
+		if (ret)
+			return ret;
+	}
+
+
+	c = serial->rx_buf[serial->buf_rd];
+	serial->buf_rd = (serial->buf_rd + 1) % SERIAL_BUFSIZE;
+
+	if (put_user(c, buf))
+		return -EFAULT;
+
+	*off += 1;
 
 	return 1;
 }
 
-static ssize_t serial_write( struct file *filp, const char __user *buf,
-	size_t bufsize, loff_t *ppos)
+static long serial_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
-	struct serial_dev *dev = file_to_serial(filp);
-	size_t i;
-	u8 c;
-
-	for (i = 0; i < bufsize; ++i) {
-		if (get_user(c, buf + i))
-			return -EFAULT;
-		serial_write_char(dev, c);
-		++dev->tx_counter;
-		if (c == '\n')
-			serial_write_char(dev, '\r');
-	}
-
-	*ppos += bufsize;
-
-	return bufsize;
-}
-
-static long serial_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{
-	struct serial_dev *dev = file_to_serial(filp);
 	unsigned int __user *argp = (unsigned int __user *) arg;
+	struct serial_dev *serial = container_of(f->private_data,
+			struct serial_dev, miscdev);
 
 	switch (cmd) {
 		case SERIAL_RESET_COUNTER:
-			dev->tx_counter = 0;
-			dev->rx_counter = 0;
+			serial->counter = 0;
 			break;
-		case SERIAL_GET_TX_COUNTER:
-			if (put_user(dev->tx_counter, argp))
-				return -EFAULT;
-			break;
-		case SERIAL_GET_RX_COUNTER:
-			if (put_user(dev->rx_counter, argp))
+		case SERIAL_GET_COUNTER:
+			if (put_user(serial->counter, argp))
 				return -EFAULT;
 			break;
 		default:
@@ -176,139 +298,155 @@ static long serial_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static irqreturn_t serial_interrupt(int irq, void *dev_id)
-{
-	struct serial_dev *dev = (struct serial_dev *) dev_id;
 
-	spin_lock(&dev->lock);
-
-	dev->buffer[dev->buf_wr] = reg_read(dev, UART_RX) & 0xff;
-	dev->buf_wr = (dev->buf_wr + 1) % SERIAL_BUFSIZE;
-
-	spin_unlock(&dev->lock);
-
-	wake_up(&dev->serial_wait);
-
-	return IRQ_HANDLED;
-}
-
-static const struct file_operations serial_fops = {
+static const struct file_operations serial_fops_dma = {
 	.owner = THIS_MODULE,
 	.read = serial_read,
-	.write = serial_write,
+	.write = serial_write_dma,
 	.unlocked_ioctl = serial_ioctl,
 };
 
+
+static const struct file_operations serial_fops_pio = {
+	.owner = THIS_MODULE,
+	.read = serial_read,
+	.write = serial_write_pio,
+	.unlocked_ioctl = serial_ioctl,
+};
+
+static irqreturn_t serial_interrupt(int irq, void *dev_id)
+{
+	int val;
+	struct serial_dev *serial = (struct serial_dev *) dev_id;
+
+	spin_lock(&serial->lock);
+
+	val = reg_read(serial, UART_RX);
+	serial->rx_buf[serial->buf_wr] = val;
+	serial->buf_wr = (serial->buf_wr + 1) % SERIAL_BUFSIZE;
+
+	spin_unlock(&serial->lock);
+
+	wake_up(&serial->wait);
+	return IRQ_HANDLED;
+}
+
 static int serial_probe(struct platform_device *pdev)
 {
-	struct serial_dev *dev;
+	int irq, ret;
+
+	struct serial_dev *serial;
 	struct resource *res;
-	int ret;
 
-	dev_info(&pdev->dev, "probe start\n");
+	use_dma = 0;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(&pdev->dev, "failed to get resource\n");
-		return -ENODEV;
-	}
-	dev_info(&pdev->dev, "got address 0x%x\n", res->start);
-
-	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
-	if (!dev)
+	pr_alert("%d", use_dma);
+	/* allocation and pointer madness */
+	serial = devm_kzalloc(&pdev->dev, sizeof(*serial), GFP_KERNEL);
+	if (!serial)
 		return -ENOMEM;
+	serial->pdev = pdev;
+	platform_set_drvdata(pdev, serial);
 
-	dev->pdev = pdev;
-	platform_set_drvdata(pdev, dev);
+	serial->regs = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(serial->regs))
+		return PTR_ERR(serial->regs);
+	serial->dev = &pdev->dev;
 
-	init_waitqueue_head(&dev->serial_wait);
-	spin_lock_init(&dev->lock);
-
-	dev->regs = devm_ioremap_resource(&pdev->dev, res);
-	if (!dev->regs) {
-		dev_err(&pdev->dev, "cannot remap registers\n");
-		return -ENOMEM;
-	}
-
-
-	/* enable device */
-
+	/* power management */
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_get_sync(&pdev->dev);
 
-	/* baud rate */
-	ret = serial_configure_baud_rate(pdev, dev);
+	/* spinlock init */
+	spin_lock_init(&serial->lock);
+
+	/* baud rate config */
+	ret = config_baud_rate(serial, pdev);
 	if (ret < 0) {
 		pm_runtime_disable(&pdev->dev);
 		return ret;
 	}
 
+	/* enable DMA */
+	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
+		UART_OMAP_SCR);
+
 	/* soft reset */
+	reg_write(serial, UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT, UART_FCR);
+	reg_write(serial, 0x00, UART_OMAP_MDR1);
 
-	reg_write(dev, UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT, UART_FCR);
-	reg_write(dev, 0x00, UART_OMAP_MDR1);
+	/* retrival of address, name etc. from the device tree */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		return -1;
+	}
+	serial->res = res;
 
-	/* interrupt handler */
 
-	dev->irq = platform_get_irq(pdev, 0);
-	ret =devm_request_irq(&pdev->dev, dev->irq, serial_interrupt, 0,
-		              "serial", dev);
+	/* interrupts */
+	irq = platform_get_irq(pdev, 0);
+	ret = devm_request_irq(&pdev->dev, irq, serial_interrupt, 0, "serial",
+			serial);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "failed to register interrupt handler (%d)\n", ret);
+		dev_err(&pdev->dev, "failed to register interrupt handler %d\n",
+				ret);
 		return ret;
 	}
+	reg_write(serial, UART_IER_RDI, UART_IER);
+	init_waitqueue_head(&serial->wait);
 
-	reg_write(dev, UART_IER_RDI, UART_IER);
+	/* dma */
+	dma_release_channel(serial->txchan);
+	/* ret = serial_init_dma(serial); */
+	/* if (!ret) */
+	/* 	use_dma = 1; */
 
-	/* register with misc subsystem */
 
-	dev->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
-		"serial-%x", res->start);
-	dev->miscdev.fops = &serial_fops;
-	dev->miscdev.parent = &pdev->dev;
-	dev->miscdev.minor = MISC_DYNAMIC_MINOR;
+	/* if (use_dma) */
+	/* 	pr_alert("Serial intied with DMA..."); */
 
-	misc_register(&dev->miscdev);
+	/* miscdev pointer madness and registration */
+	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_ATOMIC,
+			"serial-%x", res->start);
+	serial->miscdev.fops = use_dma ? &serial_fops_dma : &serial_fops_pio;
+	serial->miscdev.parent = &pdev->dev;
+	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
+	misc_register(&serial->miscdev);
 
-	/* debugfs */
-
-	dev->debugfs_dir = debugfs_create_dir(dev->miscdev.name, NULL);
-	debugfs_create_u32("tx_counter", S_IRUGO, dev->debugfs_dir, &dev->tx_counter);
-	debugfs_create_u32("rx_counter", S_IRUGO, dev->debugfs_dir, &dev->rx_counter);
-
-	dev_info(&pdev->dev, "probe complete\n");
-
+	pr_info("Device registered with name: %s\n", serial->miscdev.name);
 	return 0;
 }
 
 static int serial_remove(struct platform_device *pdev)
 {
-	struct serial_dev *dev = platform_get_drvdata(pdev);
+	struct serial_dev *serial = platform_get_drvdata(pdev);
 
-	debugfs_remove(dev->debugfs_dir);
-	misc_deregister(&dev->miscdev);
+	misc_deregister(&serial->miscdev);
+	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
-	dev_info(&pdev->dev, "remove complete\n");
-
+	if (use_dma)
+		serial_cleanup_dma(serial);
 	return 0;
 }
 
+
 static const struct of_device_id serial_of_match[] = {
 	{ .compatible = "bootlin,serial" },
-	{ /* sentinel */ },
+	{ }
 };
+
 MODULE_DEVICE_TABLE(of, serial_of_match);
 
 static struct platform_driver serial_driver = {
-        .driver = {
-                .name = "bootlin-serial",
-                .owner = THIS_MODULE,
+	.driver = {
+		.name = "bootlin-serial",
+		/* this signals "the module is in charge of this char device" */
+		.owner = THIS_MODULE,
 		.of_match_table = serial_of_match,
-        },
-        .probe = serial_probe,
-        .remove = serial_remove,
+	},
+	.probe = serial_probe,
+	.remove = serial_remove,
 };
-
 module_platform_driver(serial_driver);
 MODULE_LICENSE("GPL");

@@ -144,7 +144,6 @@ ssize_t serial_write_pio(struct file *f, const char __user *buf,
 int serial_init_dma(struct serial_dev *serial)
 {
 	int ret;
-	void * alloc_ret;
 	char first;
 
 	struct dma_slave_config txconf = {};
@@ -153,10 +152,9 @@ int serial_init_dma(struct serial_dev *serial)
 	/* requesting the dma channels */
 	serial->txchan = dma_request_chan(serial->dev, "tx");
 	if (IS_ERR(serial->txchan)) {
-		dev_dbg_once(serial->dev, "DMA tx channel request failed, "
-				"operating without tx DMA (%ld)\n",
-			     PTR_ERR(serial->txchan));
-		serial->txchan = NULL;
+		pr_alert("DMA tx channel %ld request failed.",
+				PTR_ERR(serial->txchan));
+		dma_release_channel(serial->txchan);
 		return -ENODEV;
 	}
 

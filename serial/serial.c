@@ -121,11 +121,11 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 ssize_t serial_write_pio(struct file *f, const char __user *buf,
 		size_t sz, loff_t *off)
 {
-	struct miscdevice *miscdev_ptr = f->private_data;
-	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
-			miscdev);
 	u8 c;
 	int i;
+
+	struct serial_dev *serial = file_to_serial(f);
+
 	for (i = 0; i < sz; i++) {
 		if (get_user(c, buf + i))
 			return -EFAULT;
@@ -254,9 +254,7 @@ ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 	char c;
 	int ret;
 
-	struct miscdevice *miscdev_ptr = f->private_data;
-	struct serial_dev *serial = container_of(miscdev_ptr, struct serial_dev,
-			miscdev);
+	struct serial_dev *serial = file_to_serial(f);
 
 	if (serial->buf_wr == serial->buf_rd) {
 		ret = wait_event_interruptible(serial->wait,
@@ -280,8 +278,7 @@ ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 static long serial_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
 	unsigned int __user *argp = (unsigned int __user *) arg;
-	struct serial_dev *serial = container_of(f->private_data,
-			struct serial_dev, miscdev);
+	struct serial_dev *serial = file_to_serial(f);
 
 	switch (cmd) {
 		case SERIAL_RESET_COUNTER:

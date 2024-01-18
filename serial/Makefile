@@ -1,5 +1,5 @@
 ifneq ($(KERNELRELEASE),)
-obj-m := serial.o
+obj-m := serial.o ref.o
 else
 KDIR := $(HOME)/projects/linux-kernel-labs/src/linux
 all:

@@ -151,7 +151,7 @@ int serial_init_dma(struct serial_dev *serial)
 	/* requesting the dma channels */
 	serial->txchan = dma_request_chan(serial->dev, "tx");
 	if (IS_ERR(serial->txchan)) {
-		pr_alert("DMA tx channel %ld request failed.",
+		pr_alert("DMA tx channel request failed (%ld)",
 				PTR_ERR(serial->txchan));
 		return -ENODEV;
 	}
@@ -393,7 +393,6 @@ static int serial_probe(struct platform_device *pdev)
 
 	/* dma */
 	ret = serial_init_dma(serial);
-	pr_alert("Serial intied with%s DMA...", !ret ? "" : "out");
 
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_ATOMIC,
@@ -403,7 +402,8 @@ static int serial_probe(struct platform_device *pdev)
 	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
 	misc_register(&serial->miscdev);
 
-	pr_info("Device registered with name: %s\n", serial->miscdev.name);
+	pr_info("%s registered with%s DMA\n", serial->miscdev.name,
+			!ret ? "" : "out");
 	return 0;
 }
 

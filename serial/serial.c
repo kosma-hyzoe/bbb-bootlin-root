@@ -51,9 +51,8 @@ struct serial_dev {
 	spinlock_t lock;
 	struct dma_chan *txchan;
 	int txongoing;
+	struct completion txcomplete;
 	int use_dma;
-	struct dma_async_tx_descriptor *desc;
-	struct completion dma_async_issue_done;
 	dma_addr_t fifo_dma_addr;
 	dma_addr_t dma_addr;
 	char rx_buf[SERIAL_BUFSIZE];
@@ -188,12 +187,20 @@ int serial_init_dma(struct serial_dev *serial)
 	return 0;
 }
 
+void async_dma_tx_complete(void *serial)
+{
+	struct serial_dev *ser = (struct serial_dev *)serial;
+	pr_alert("ser: %d", ser->txongoing);
+	complete(&ser->txcomplete);
+}
+
 ssize_t serial_write_dma(struct file *f, const char __user *buf,
 		size_t sz, loff_t *off)
 {
 	int to_copy, copied, ret;
 	char first;
 	unsigned long flags;
+	struct dma_async_tx_descriptor *desc;
 	dma_cookie_t cookie;
 	struct serial_dev *serial = file_to_serial(f);
 
@@ -205,6 +212,7 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	}
 	serial->txongoing = 1;
 	spin_unlock_irqrestore(&serial->lock, flags);
+	/* ========================below is chaos============================ */
 
 	to_copy = min_t(size_t, sz, sizeof(serial->tx_buf));
 	copied = copy_from_user(serial->tx_buf, buf, SERIAL_BUFSIZE);
@@ -219,31 +227,37 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	ret = dma_mapping_error(serial->dev, serial->dma_addr);
 	if (ret)
 		return -ret;
-	serial->desc = dmaengine_prep_slave_single(serial->txchan,
+	desc = dmaengine_prep_slave_single(serial->txchan,
 			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
-	if (!serial->desc) {
+	if (!desc) {
 		pr_alert("failed to allcoate DMA descriptor");
 		return -EIO;
 	}
-
-	cookie = dmaengine_submit(serial->desc);
+	cookie = dmaengine_submit(desc);
 	ret = dma_submit_error(cookie);
 	if (ret) {
 		pr_alert("failed to submit damengine cookie");
 		return ret;
 	}
 
+	init_completion(&serial->txcomplete);
+	dma_async_issue_pending(serial->txchan);
+	reg_write(serial, first, UART_TX);
+
+	desc->callback = async_dma_tx_complete;
+	desc->callback_param = serial;
+	wait_for_completion(&serial->txcomplete);
+
+	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE,
+			 DMA_TO_DEVICE);
+
+	/* ==================above is chaos===================================*/
 	spin_lock_irqsave(&serial->lock, flags);
 	serial->txongoing = 0;
 	spin_unlock_irqrestore(&serial->lock, flags);
 
 
-	dma_async_issue_pending(serial->txchan);
-	reg_write(serial, first, UART_TX);
-
-	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE,
-			 DMA_TO_DEVICE);
 	return 0;
 }
 

@@ -51,6 +51,7 @@ struct serial_dev {
 	spinlock_t lock;
 	struct dma_chan *txchan;
 	int txongoing;
+	int use_dma;
 	struct dma_async_tx_descriptor *desc;
 	struct completion dma_async_issue_done;
 	dma_addr_t fifo_dma_addr;
@@ -61,8 +62,6 @@ struct serial_dev {
 	unsigned int buf_rd; /* read index */
 	unsigned int buf_wr; /* write index */
 };
-
-static int use_dma = 0;
 
 static struct serial_dev *file_to_serial(struct file *f)
 {
@@ -140,11 +139,22 @@ ssize_t serial_write_pio(struct file *f, const char __user *buf,
 	return sz;
 }
 
+int serial_cleanup_dma(struct serial_dev *serial)
+{
+	dma_release_channel(serial->txchan);
+	dmaengine_terminate_sync(serial->txchan);
+	dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
+			   0);
+
+	return 0;
+}
+
 int serial_init_dma(struct serial_dev *serial)
 {
 	int ret;
 
 	struct dma_slave_config txconf = {};
+
 
 	/* requesting the dma channel */
 	serial->txchan = dma_request_chan(serial->dev, "tx");
@@ -153,19 +163,13 @@ int serial_init_dma(struct serial_dev *serial)
 				PTR_ERR(serial->txchan));
 		return -ENODEV;
 	}
-	/* enable DMA on the UART controller */
-	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
-		UART_OMAP_SCR);
 
 	serial->fifo_dma_addr = dma_map_resource(serial->dev,
 			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
 	ret = dma_mapping_error(serial->dev, serial->fifo_dma_addr);
 	if (ret) {
 		pr_alert("Not enough memory to map DMA Resource");
-		dmaengine_terminate_sync(serial->txchan);
-		dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
-				   0);
-		dma_release_channel(serial->txchan);
+		serial_cleanup_dma(serial);
 		return -ret;
 	}
 
@@ -173,25 +177,11 @@ int serial_init_dma(struct serial_dev *serial)
 	txconf.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
 	txconf.dst_addr = serial->fifo_dma_addr;
 	ret = dmaengine_slave_config(serial->txchan, &txconf);
-	if (ret < 0) {
+	if (ret) {
 		pr_alert("failed to config dmaengine slave");
-		dmaengine_terminate_sync(serial->txchan);
-		dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
-				   0);
-		dma_release_channel(serial->txchan);
+		serial_cleanup_dma(serial);
 		return -ret;
 	}
-
-
-	return 0;
-}
-
-int serial_cleanup_dma(struct serial_dev *serial)
-{
-	dmaengine_terminate_sync(serial->txchan);
-	dma_unmap_resource(serial->dev, serial->fifo_dma_addr, 4, DMA_TO_DEVICE,
-			   0);
-	dma_release_channel(serial->txchan);
 
 	return 0;
 }
@@ -205,6 +195,7 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	dma_cookie_t cookie;
 	struct serial_dev *serial = file_to_serial(f);
 
+	pr_alert("serial_write called");
 	spin_lock_irqsave(&serial->lock, flags);
 	if (serial->txongoing) {
 		spin_unlock_irqrestore(&serial->lock, flags);
@@ -342,7 +333,6 @@ static int serial_probe(struct platform_device *pdev)
 	struct serial_dev *serial;
 	struct resource *res;
 
-	use_dma = 0;
 
 	/* allocation and pointer madness */
 	serial = devm_kzalloc(&pdev->dev, sizeof(*serial), GFP_KERNEL);
@@ -350,6 +340,7 @@ static int serial_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	serial->pdev = pdev;
 	platform_set_drvdata(pdev, serial);
+	serial->use_dma = 0;
 
 	serial->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(serial->regs))
@@ -358,6 +349,7 @@ static int serial_probe(struct platform_device *pdev)
 
 	/* power management */
 	pm_runtime_enable(&pdev->dev);
+	pr_alert("pm enabled: %d", pm_runtime_enabled(&pdev->dev));
 	pm_runtime_get_sync(&pdev->dev);
 
 	/* spinlock init */
@@ -400,17 +392,18 @@ static int serial_probe(struct platform_device *pdev)
 
 	/* dma */
 	ret = serial_init_dma(serial);
+	serial->use_dma = !ret;
 
 	/* miscdev pointer madness and registration */
 	serial->miscdev.name = devm_kasprintf(&pdev->dev, GFP_ATOMIC,
 			"serial-%x", res->start);
-	pr_alert("use fops: %d", !ret);
-	serial->miscdev.fops = !ret ? &serial_fops_dma : &serial_fops_pio;
+	serial->miscdev.fops =
+		serial->use_dma ? &serial_fops_dma : &serial_fops_pio;
 	serial->miscdev.parent = &pdev->dev;
 	serial->miscdev.minor = MISC_DYNAMIC_MINOR;
 	misc_register(&serial->miscdev);
 	pr_info("%s registered with%s DMA\n", serial->miscdev.name,
-		!ret ? "" : "out");
+		serial->use_dma ? "" : "out");
 
 	return 0;
 }
@@ -419,12 +412,13 @@ static int serial_remove(struct platform_device *pdev)
 {
 	struct serial_dev *serial = platform_get_drvdata(pdev);
 
+	if (serial->use_dma) {
+		serial_cleanup_dma(serial);
+	}
+
 	misc_deregister(&serial->miscdev);
-	/* power management runtime disable */
 	pm_runtime_disable(&pdev->dev);
 
-	if (use_dma)
-		serial_cleanup_dma(serial);
 	return 0;
 }
 

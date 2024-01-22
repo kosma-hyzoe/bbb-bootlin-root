@@ -183,6 +183,8 @@ int serial_init_dma(struct serial_dev *serial)
 		return -ret;
 	}
 
+	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
+		UART_OMAP_SCR);
 	return 0;
 }
 
@@ -196,8 +198,6 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	struct serial_dev *serial = file_to_serial(f);
 
 	pr_alert("serial_write called");
-	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
-		UART_OMAP_SCR);
 	spin_lock_irqsave(&serial->lock, flags);
 	if (serial->txongoing) {
 		spin_unlock_irqrestore(&serial->lock, flags);

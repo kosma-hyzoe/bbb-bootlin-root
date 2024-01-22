@@ -183,10 +183,6 @@ int serial_init_dma(struct serial_dev *serial)
 	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
 		UART_OMAP_SCR);
 
-	// TODO supposedly I should use some wait_for_complete() here. why? how?
-	// looks like it's a one-thread kind of deal, unless uart4 and uart2
-	// init could clash...
-
 	return 0;
 }
 

@@ -35,7 +35,7 @@
 #define SERIAL_RESET_COUNTER	0
 #define SERIAL_GET_COUNTER	1
 
-#define SERIAL_BUFSIZE 16
+#define SERIAL_BUFFSIZE 16
 
 #define OMAP_UART_SCR_DMAMODE_CTL3 0x7
 #define OMAP_UART_SCR_TX_TRIG_GRANU1 BIT(6)
@@ -55,8 +55,8 @@ struct serial_dev {
 	int use_dma;
 	dma_addr_t fifo_dma_addr;
 	dma_addr_t dma_addr;
-	char rx_buf[SERIAL_BUFSIZE];
-	char tx_buf[SERIAL_BUFSIZE];
+	char rx_buf[SERIAL_BUFFSIZE];
+	char tx_buf[SERIAL_BUFFSIZE];
 
 	unsigned int buf_rd; /* read index */
 	unsigned int buf_wr; /* write index */
@@ -189,9 +189,7 @@ int serial_init_dma(struct serial_dev *serial)
 
 void async_dma_tx_complete(void *serial)
 {
-	struct serial_dev *ser = (struct serial_dev *)serial;
-	pr_alert("ser: %d", ser->txongoing);
-	complete(&ser->txcomplete);
+	complete(&((struct serial_dev *)serial)->txcomplete);
 }
 
 ssize_t serial_write_dma(struct file *f, const char __user *buf,
@@ -214,21 +212,20 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	spin_unlock_irqrestore(&serial->lock, flags);
 	/* ========================below is chaos============================ */
 
-	to_copy = min_t(size_t, sz, sizeof(serial->tx_buf));
-	copied = copy_from_user(serial->tx_buf, buf, SERIAL_BUFSIZE);
+	to_copy = min_t(size_t, sz, SERIAL_BUFFSIZE);
+	copied = copy_from_user(serial->tx_buf, buf, to_copy);
 
 	/* OMAP 8250 UART quirk: need to write the first byte manually */
 	first = serial->tx_buf[0];
-	pr_alert("first char: %c", first);
 
-	/* grants control from CPU to DMA hardware */
-	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, SERIAL_BUFSIZE,
+	/* remap the buffer */
+	serial->dma_addr = dma_map_single(serial->dev, serial->tx_buf, sz,
 			     DMA_TO_DEVICE);
 	ret = dma_mapping_error(serial->dev, serial->dma_addr);
 	if (ret)
 		return -ret;
 	desc = dmaengine_prep_slave_single(serial->txchan,
-			serial->dma_addr +1, SERIAL_BUFSIZE - 1, DMA_MEM_TO_DEV,
+			serial->dma_addr + 1, to_copy - 1, DMA_MEM_TO_DEV,
 			DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 	if (!desc) {
 		pr_alert("failed to allcoate DMA descriptor");
@@ -249,7 +246,7 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	desc->callback_param = serial;
 	wait_for_completion(&serial->txcomplete);
 
-	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE,
+	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFFSIZE,
 			 DMA_TO_DEVICE);
 
 	/* ==================above is chaos===================================*/
@@ -278,7 +275,7 @@ ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 
 
 	c = serial->rx_buf[serial->buf_rd];
-	serial->buf_rd = (serial->buf_rd + 1) % SERIAL_BUFSIZE;
+	serial->buf_rd = (serial->buf_rd + 1) % SERIAL_BUFFSIZE;
 
 	if (put_user(c, buf))
 		return -EFAULT;
@@ -332,7 +329,7 @@ static irqreturn_t serial_interrupt(int irq, void *dev_id)
 
 	val = reg_read(serial, UART_RX);
 	serial->rx_buf[serial->buf_wr] = val;
-	serial->buf_wr = (serial->buf_wr + 1) % SERIAL_BUFSIZE;
+	serial->buf_wr = (serial->buf_wr + 1) % SERIAL_BUFFSIZE;
 
 	spin_unlock(&serial->lock);
 
@@ -364,7 +361,6 @@ static int serial_probe(struct platform_device *pdev)
 
 	/* power management */
 	pm_runtime_enable(&pdev->dev);
-	pr_alert("pm enabled: %d", pm_runtime_enabled(&pdev->dev));
 	pm_runtime_get_sync(&pdev->dev);
 
 	/* spinlock init */

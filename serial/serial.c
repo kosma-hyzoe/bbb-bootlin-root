@@ -153,6 +153,9 @@ int serial_init_dma(struct serial_dev *serial)
 				PTR_ERR(serial->txchan));
 		return -ENODEV;
 	}
+	/* enable DMA on the UART controller */
+	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
+		UART_OMAP_SCR);
 
 	serial->fifo_dma_addr = dma_map_resource(serial->dev,
 			serial->res->start + UART_TX * 4, 4, DMA_TO_DEVICE, 0);
@@ -179,9 +182,6 @@ int serial_init_dma(struct serial_dev *serial)
 		return -ret;
 	}
 
-	/* enable DMA on the UART controller */
-	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
-		UART_OMAP_SCR);
 
 	return 0;
 }

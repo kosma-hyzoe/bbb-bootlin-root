@@ -244,6 +244,8 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 
 	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE,
 			 DMA_TO_DEVICE);
+	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
+		UART_OMAP_SCR);
 	return 0;
 }
 

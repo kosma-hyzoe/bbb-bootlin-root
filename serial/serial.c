@@ -196,6 +196,8 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	struct serial_dev *serial = file_to_serial(f);
 
 	pr_alert("serial_write called");
+	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
+		UART_OMAP_SCR);
 	spin_lock_irqsave(&serial->lock, flags);
 	if (serial->txongoing) {
 		spin_unlock_irqrestore(&serial->lock, flags);
@@ -206,8 +208,6 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 
 	to_copy = min_t(size_t, sz, sizeof(serial->tx_buf));
 	copied = copy_from_user(serial->tx_buf, buf, SERIAL_BUFSIZE);
-	if (to_copy - copied)
-		return -EFAULT;
 
 	/* OMAP 8250 UART quirk: need to write the first byte manually */
 	first = serial->tx_buf[0];
@@ -235,7 +235,7 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 	}
 
 	spin_lock_irqsave(&serial->lock, flags);
-	serial->txongoing = false;
+	serial->txongoing = 0;
 	spin_unlock_irqrestore(&serial->lock, flags);
 
 
@@ -244,8 +244,6 @@ ssize_t serial_write_dma(struct file *f, const char __user *buf,
 
 	dma_unmap_single(serial->dev, serial->dma_addr, SERIAL_BUFSIZE,
 			 DMA_TO_DEVICE);
-	reg_write(serial, OMAP_UART_SCR_DMAMODE_CTL3 | OMAP_UART_SCR_TX_TRIG_GRANU1,
-		UART_OMAP_SCR);
 	return 0;
 }
 
@@ -343,6 +341,7 @@ static int serial_probe(struct platform_device *pdev)
 	serial->pdev = pdev;
 	platform_set_drvdata(pdev, serial);
 	serial->use_dma = 0;
+	serial->txongoing = 0;
 
 	serial->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(serial->regs))

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+#define DEBUG
+
 #include "asm-generic/errno-base.h"
 #include "asm/vdso/processor.h"
 #include "linux/completion.h"
@@ -40,13 +42,14 @@
 #define OMAP_UART_SCR_DMAMODE_CTL3 0x7
 #define OMAP_UART_SCR_TX_TRIG_GRANU1 BIT(6)
 
+
 struct serial_dev {
 	struct miscdevice miscdev;
 	struct platform_device *pdev;
 	struct device *dev;
 	struct resource *res;
 	void __iomem *regs;
-	unsigned int counter;
+	u64 counter;
 	wait_queue_head_t wait;
 	spinlock_t lock;
 	struct dma_chan *txchan;
@@ -106,6 +109,7 @@ static void serial_write_char(struct serial_dev *serial, u8 val)
 
 	spin_lock_irqsave(&serial->lock, flags);
 
+	dev_dbg(serial->dev, "char written: '%c' (%d)", val, val);
 	/* wait until transmit hold register is empty */
 	while ((reg_read(serial, UART_LSR) & UART_LSR_THRE) == 0)
 		cpu_relax();
@@ -266,6 +270,7 @@ ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 
 	struct serial_dev *serial = file_to_serial(f);
 
+
 	if (serial->buf_wr == serial->buf_rd) {
 		ret = wait_event_interruptible(serial->wait,
 				serial->buf_wr != serial->buf_rd);
@@ -275,6 +280,7 @@ ssize_t serial_read(struct file *f, char __user *buf, size_t sz, loff_t *off)
 
 
 	c = serial->rx_buf[serial->buf_rd];
+	dev_dbg(serial->dev, "char read: %c", c);
 	serial->buf_rd = (serial->buf_rd + 1) % SERIAL_BUFFSIZE;
 
 	if (put_user(c, buf))
@@ -343,6 +349,9 @@ static int serial_probe(struct platform_device *pdev)
 
 	struct serial_dev *serial;
 	struct resource *res;
+
+	struct dentry *parent_dir;
+	struct dentry *counter_file;
 
 
 	/* allocation and pointer madness */
@@ -415,6 +424,9 @@ static int serial_probe(struct platform_device *pdev)
 	misc_register(&serial->miscdev);
 	pr_info("%s registered with%s DMA\n", serial->miscdev.name,
 		serial->use_dma ? "" : "out");
+
+	parent_dir = debugfs_create_dir(serial->miscdev.name, NULL);
+	debugfs_create_u64("counter", S_IRWXU, parent_dir, &serial->counter);
 
 	return 0;
 }

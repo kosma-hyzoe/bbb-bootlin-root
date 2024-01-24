@@ -351,7 +351,6 @@ static int serial_probe(struct platform_device *pdev)
 	struct resource *res;
 
 	struct dentry *parent_dir;
-	struct dentry *counter_file;
 
 
 	/* allocation and pointer madness */
@@ -426,7 +425,7 @@ static int serial_probe(struct platform_device *pdev)
 		serial->use_dma ? "" : "out");
 
 	parent_dir = debugfs_create_dir(serial->miscdev.name, NULL);
-	debugfs_create_u64("counter", S_IRWXU, parent_dir, &serial->counter);
+	debugfs_create_u64("counter", 0666, parent_dir, &serial->counter);
 
 	return 0;
 }
